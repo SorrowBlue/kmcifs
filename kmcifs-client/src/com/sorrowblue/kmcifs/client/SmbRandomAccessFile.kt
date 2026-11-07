@@ -120,28 +120,12 @@ class SmbRandomAccessFile(
         get() = currentPosition
 
     /**
-     * 現在のファイルポインタ位置を返す。
-     */
-    fun position(): Long = currentPosition
-
-    /**
-     * Java の `RandomAccessFile.getFilePointer()` 互換の現在オフセット。
-     */
-    val filePointer: Long
-        get() = currentPosition
-
-    /**
      * 現在のファイルサイズ（バイト単位）。
      *
      * オープン済みの場合はサーバーから取得・更新されたファイルサイズを返す。
      */
     val length: Long
         get() = requireOpenFile().size
-
-    /**
-     * 現在のファイルサイズ（バイト単位）を返す。
-     */
-    fun length(): Long = length
 
     /**
      * オープン済みのファイルのメタデータ。

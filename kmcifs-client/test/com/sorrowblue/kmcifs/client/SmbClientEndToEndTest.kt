@@ -122,7 +122,7 @@ class SmbClientEndToEndTest {
         val raf = share.openRandomAccessFile("data/random.bin", "rw")
         assertTrue(raf.isOpen)
         assertEquals(0L, raf.position)
-        assertEquals(0L, raf.length())
+        assertEquals(0L, raf.length)
 
         raf.write("ABCDEFGHIJ".encodeToByteArray())
         assertEquals(10L, raf.position)
@@ -130,7 +130,7 @@ class SmbClientEndToEndTest {
 
         // Seek to offset 3 and overwrite 3 bytes ("DEF" -> "xyz")
         raf.seek(3L)
-        assertEquals(3L, raf.position())
+        assertEquals(3L, raf.position)
         raf.write("xyz".encodeToByteArray(), 0, 3)
         assertEquals(6L, raf.position)
         assertEquals(10L, raf.length)
