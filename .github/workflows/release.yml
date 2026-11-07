@@ -12,10 +12,11 @@ on:
       - ".github/workflows/actions.lock"
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Release tag to publish (e.g. v0.0.1). Leave empty for dry-run build verification only."
+      dry_run:
+        description: "Run build verification only without tagging or publishing a release"
         required: false
-        type: string
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -25,37 +26,53 @@ env:
 
 jobs:
   prepare:
-    name: Prepare Draft Release
+    name: Tag & Prepare Draft Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
       is_release: ${{ steps.meta.outputs.is_release }}
       tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4.4.0
 
-      - name: Determine release context
+      - name: Read version from module.yaml and determine release context
         id: meta
         run: |
+          VERSION=$(sed -nE 's/^ *version: *([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' kmcifs-client/module.yaml | head -n 1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Failed to parse version from kmcifs-client/module.yaml"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${{ inputs.tag }}" ]]; then
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" != "true" ]]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
             echo "tag=dry-run" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create Draft Release
+      - name: Create Git Tag and Draft Release
         if: steps.meta.outputs.is_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.meta.outputs.tag }}
         run: |
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Creating and pushing tag: $TAG"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "refs/tags/$TAG"
+          fi
+
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --draft \
@@ -227,6 +244,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     steps:
       - name: Publish Draft Release (Lock as Immutable)
         env:
@@ -235,3 +253,4 @@ jobs:
         run: |
           gh release edit "$TAG" --draft=false
           echo "Published immutable release: $TAG"
+          gh workflow run docs.yml

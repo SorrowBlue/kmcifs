@@ -169,12 +169,23 @@ jobs:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
         run: |
+          CURRENT_VERSION=$(sed -nE 's/^ *version: *([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' kmcifs-client/module.yaml | head -n 1)
+          if [ -z "$CURRENT_VERSION" ]; then
+            echo "::error::Failed to parse version from kmcifs-client/module.yaml"
+            exit 1
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          NEXT_PATCH=$((PATCH + 1))
+          SNAPSHOT_VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-SNAPSHOT"
+          echo "Computed SNAPSHOT version: ${CURRENT_VERSION} -> ${SNAPSHOT_VERSION}"
+
           if [ -z "$MAVEN_CENTRAL_USERNAME" ] || [ -z "$MAVEN_CENTRAL_PASSWORD" ]; then
-            echo "::notice::Skipping SNAPSHOT publication because MAVEN_CENTRAL_USERNAME / MAVEN_CENTRAL_PASSWORD secrets are not configured."
+            echo "::notice::Skipping SNAPSHOT publication (${SNAPSHOT_VERSION}) because MAVEN_CENTRAL_USERNAME / MAVEN_CENTRAL_PASSWORD secrets are not configured."
             exit 0
           fi
 
-          sed -i.bak -E 's/^( *version: *)([0-9]+\.[0-9]+\.[0-9]+)$/\1\2-SNAPSHOT/' kmcifs-client/module.yaml
+          sed -i.bak -E "s/^( *version: *).*/\1${SNAPSHOT_VERSION}/" kmcifs-client/module.yaml
           rm -f kmcifs-client/module.yaml.bak
 
           printf "centralUsername=%s\ncentralPassword=%s\n" "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_PASSWORD" > local.properties

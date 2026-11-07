@@ -40,9 +40,11 @@ fun generateDokkaHtml(
         .filter { it.exists() && it.isRegularFile() }
         .map { it.toFile() }
 
+    val moduleVersion = readModuleVersion(moduleRootDir.resolve("module.yaml")) ?: "0.0.1"
+
     val configuration = DokkaConfigurationImpl(
         moduleName = moduleName,
-        moduleVersion = "0.0.1",
+        moduleVersion = moduleVersion,
         outputDir = outputDir.toFile(),
         offlineMode = false,
         failOnWarning = false,
@@ -93,6 +95,14 @@ fun generateDokkaHtml(
 
     runCatching {
         pruneUnusedDokkaCache()
+    }
+}
+
+private fun readModuleVersion(moduleYaml: Path): String? {
+    if (!moduleYaml.exists()) return null
+    val regex = Regex("""^\s*version:\s*([^\s#]+)""")
+    return Files.readAllLines(moduleYaml).firstNotNullOfOrNull { line ->
+        regex.find(line)?.groupValues?.get(1)?.trim('"', '\'')
     }
 }
 
