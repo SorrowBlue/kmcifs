@@ -29,19 +29,24 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
-      - name: Cache uv, Zensical, Kotlin Toolchain, and Dokka dependencies
+      - name: Cache Kotlin Toolchain CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/JetBrains/Kotlin/cli
+          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin') }}
+
+      - name: Cache project and Dokka dependencies
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/uv
-            ~/.local/share/uv
             ~/.cache/JetBrains/Kotlin
+            !~/.cache/JetBrains/Kotlin/cli
             ~/.local/share/JetBrains/Kotlin
             ~/.m2/repository
-          key: ${{ runner.os }}-docs-cache-${{ hashFiles('zensical.toml', 'project.yaml', '**/module.yaml', 'kotlin') }}
-          restore-keys: |
-            ${{ runner.os }}-docs-cache-
+          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
 
       - name: Build Zensical documentation site
         run: uvx --python 3.13 zensical build --clean
