@@ -1,0 +1,11 @@
+tasks:
+  generateHtml:
+    action: !com.sorrowblue.kmcifs.dokka.generateDokkaHtml
+      moduleName: ${module.name}
+      moduleRootDir: ${module.rootDir}
+      compileClasspath: ${module.compileClasspath}
+      outputDir: ${taskOutputDir}
+
+commands:
+  - name: dokka
+    performedBy: generateHtml

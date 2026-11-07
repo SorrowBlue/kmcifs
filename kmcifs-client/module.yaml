@@ -36,3 +36,6 @@ repositories:
   - id: mavenLocal
     url: mavenLocal
     publish: true
+
+plugins:
+  dokka: enabled

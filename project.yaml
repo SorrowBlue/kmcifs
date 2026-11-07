@@ -1,5 +1,6 @@
 modules:
   - kmcifs-client
+  - plugins/dokka
   - sample
   - sample/androidApp
   - sample/iosApp
@@ -7,3 +8,6 @@ modules:
   - sample/linuxApp
   - sample/macosApp
   - sample/windowsApp
+
+plugins:
+  - ./plugins/dokka
