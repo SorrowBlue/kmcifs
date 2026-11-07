@@ -27,6 +27,7 @@ import com.sorrowblue.kmcifs.client.protocol.SmbTransformHeader
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -98,6 +99,99 @@ class SmbClientEndToEndTest {
         client.closeSuspend()
 
         assertTrue(mockTransport.encryptedPacketsCount >= 10, "All post-auth packets should be encrypted via SMB3 Transform Header")
+    }
+
+    @Test
+    fun testRandomAccessFileOperations() = runTest {
+        val credentials = SmbCredentials(
+            username = "alice",
+            password = "SecretPassword123!",
+            domain = "WORKGROUP",
+        )
+        val mockTransport = MockSmb3ServerTransport(credentials)
+        val config = SmbConfig(
+            encryptionPolicy = SmbEncryptionPolicy.REQUIRED,
+            preferEncryption = true,
+        )
+
+        val client = SmbClient("192.168.1.10", 445, config, mockTransport)
+        client.initializeSession(credentials)
+        val share = client.connectShare("PublicDocs")
+
+        // 1. Open in "rw" mode, write bytes, seek, overwrite, check position & length
+        val raf = share.openRandomAccessFile("data/random.bin", "rw")
+        assertTrue(raf.isOpen)
+        assertEquals(0L, raf.position)
+        assertEquals(0L, raf.length())
+
+        raf.write("ABCDEFGHIJ".encodeToByteArray())
+        assertEquals(10L, raf.position)
+        assertEquals(10L, raf.length)
+
+        // Seek to offset 3 and overwrite 3 bytes ("DEF" -> "xyz")
+        raf.seek(3L)
+        assertEquals(3L, raf.position())
+        raf.write("xyz".encodeToByteArray(), 0, 3)
+        assertEquals(6L, raf.position)
+        assertEquals(10L, raf.length)
+
+        // Read single byte at position 6 ('G')
+        assertEquals('G'.code.toByte(), raf.readByte())
+        assertEquals(7L, raf.position)
+
+        // Seek back to 0 and read into buffer
+        raf.seek(0L)
+        val buf = ByteArray(10)
+        val bytesRead = raf.read(buf)
+        assertEquals(10, bytesRead)
+        assertEquals("ABCxyzGHIJ", buf.decodeToString())
+        assertEquals(10L, raf.position)
+
+        // At EOF: read() returns -1, read(buf) returns -1, readByte() throws SmbEndOfFileException
+        assertEquals(-1, raf.read())
+        assertEquals(-1, raf.read(buf))
+        assertFailsWith<SmbEndOfFileException> {
+            raf.readByte()
+        }
+
+        // Write primitive values & read them back
+        raf.seek(10L)
+        raf.writeByte(0x7F)
+        raf.writeInt(0x12345678)
+        raf.writeLong(0x0102030405060708L)
+        assertEquals(23L, raf.length)
+
+        raf.seek(10L)
+        assertEquals(0x7F.toByte(), raf.readByte())
+        assertEquals(0x12345678, raf.readInt())
+        assertEquals(0x0102030405060708L, raf.readLong())
+        assertEquals(23L, raf.position)
+
+        // Truncate via setLength and verify position is clamped
+        raf.setLength(6L)
+        assertEquals(6L, raf.length)
+        assertEquals(6L, raf.position)
+        raf.closeSuspend()
+        assertFalse(raf.isOpen)
+
+        // 2. Re-open via SmbRandomAccessFile(share, path, "r").open() in read-only mode
+        val readOnlyRaf = SmbRandomAccessFile(share, "data/random.bin", "r").open()
+        assertEquals(6L, readOnlyRaf.length)
+        assertEquals('A'.code.toByte(), readOnlyRaf.readByte())
+        assertEquals(1L, readOnlyRaf.position)
+
+        val remaining = ByteArray(5)
+        readOnlyRaf.readFully(remaining)
+        assertEquals("BCxyz", remaining.decodeToString())
+        assertEquals(6L, readOnlyRaf.position)
+
+        assertFailsWith<IllegalStateException> {
+            readOnlyRaf.write(0x41)
+        }
+        readOnlyRaf.closeSuspend()
+
+        share.closeSuspend()
+        client.closeSuspend()
     }
 
     /**

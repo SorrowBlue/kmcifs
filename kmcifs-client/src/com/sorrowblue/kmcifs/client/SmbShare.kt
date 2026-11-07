@@ -144,6 +144,40 @@ class SmbShare internal constructor(
     }
 
     /**
+     * Java の `RandomAccessFile` に相当する [SmbRandomAccessFile] をオープンして返す。
+     *
+     * [mode] には `"r"`（読み取り専用）、`"rw"`（読み書き）、`"rws"` / `"rwd"`（同期書き込み付き読み書き）を指定できる。
+     */
+    suspend fun openRandomAccessFile(
+        path: String,
+        mode: String = "r",
+        bufferSize: Int = SmbRandomAccessFile.DEFAULT_BUFFER_SIZE,
+    ): SmbRandomAccessFile {
+        return SmbRandomAccessFile.open(
+            share = this,
+            path = path,
+            mode = mode,
+            bufferSize = bufferSize,
+        )
+    }
+
+    /**
+     * 指定した [SmbRandomAccessMode] で [SmbRandomAccessFile] をオープンして返す。
+     */
+    suspend fun openRandomAccessFile(
+        path: String,
+        mode: SmbRandomAccessMode,
+        bufferSize: Int = SmbRandomAccessFile.DEFAULT_BUFFER_SIZE,
+    ): SmbRandomAccessFile {
+        return SmbRandomAccessFile.open(
+            share = this,
+            path = path,
+            mode = mode,
+            bufferSize = bufferSize,
+        )
+    }
+
+    /**
      * ファイル全体を読み取ってバイト配列として返す。
      */
     suspend fun readBytes(path: String): ByteArray {

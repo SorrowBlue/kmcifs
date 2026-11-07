@@ -205,6 +205,22 @@ class SmbFile internal constructor(
     }
 
     /**
+     * このファイルハンドルをラップした [SmbRandomAccessFile] を返す。
+     */
+    fun toRandomAccessFile(
+        path: String = "",
+        mode: SmbRandomAccessMode = SmbRandomAccessMode.READ_WRITE,
+        bufferSize: Int = SmbRandomAccessFile.DEFAULT_BUFFER_SIZE,
+    ): SmbRandomAccessFile {
+        return SmbRandomAccessFile(
+            file = this,
+            path = path,
+            mode = mode,
+            bufferSize = bufferSize,
+        )
+    }
+
+    /**
      * ファイルハンドルをサーバー上で閉じる (`SMB2 CLOSE`)。
      */
     suspend fun closeSuspend() {

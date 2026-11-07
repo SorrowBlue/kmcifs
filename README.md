@@ -104,13 +104,20 @@ try {
     share.writeText("reports/summary.txt", "Quarterly result")
     val text = share.readText("reports/summary.txt")
 
-    val file = share.openFile("reports/summary.txt")
+    // Java の RandomAccessFile に相当するランダムアクセス操作
+    val raf = share.openRandomAccessFile("reports/summary.txt", mode = "rw")
     try {
-        file.lock(offset = 0L, length = 1024L, exclusive = true)
-        val chunk = file.read(offset = 0L, length = 64)
-        file.unlock(offset = 0L, length = 1024L)
+        println("length = ${raf.length}, position = ${raf.position}")
+        val firstByte: Byte = raf.readByte()
+
+        raf.seek(10L)
+        val buffer = ByteArray(6)
+        val bytesRead = raf.read(buffer)
+
+        raf.seek(raf.length)
+        raf.write("\nReviewed".encodeToByteArray())
     } finally {
-        file.closeSuspend()
+        raf.closeSuspend()
     }
 
     share.rename("reports/summary.txt", "reports/summary_archived.txt")
