@@ -36,6 +36,40 @@ jobs:
           gh extension install github/gh-actions-lock
           gh actions-lock --verify-local
 
+      - name: Verify module.yaml version is not downgraded
+        run: |
+          VERSION=$(sed -nE 's/^ *version: *([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' kmcifs-client/module.yaml | head -n 1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Failed to parse version from kmcifs-client/module.yaml"
+            exit 1
+          fi
+
+          LATEST_TAG_VERSION=$(git ls-remote --tags --refs origin "refs/tags/v[0-9]*.[0-9]*.[0-9]*" \
+            | awk '{sub("refs/tags/v", "", $2); print $2}' \
+            | sort -V \
+            | tail -n 1)
+
+          if [ -n "$LATEST_TAG_VERSION" ]; then
+            HIGHEST=$(printf '%s\n%s\n' "$LATEST_TAG_VERSION" "$VERSION" | sort -V | tail -n 1)
+            if [ "$HIGHEST" != "$VERSION" ]; then
+              echo "::error::Version '${VERSION}' in kmcifs-client/module.yaml is older than the latest released tag 'v${LATEST_TAG_VERSION}'."
+              exit 1
+            fi
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            BASE_VERSION=$(git show "origin/${{ github.base_ref }}:kmcifs-client/module.yaml" 2>/dev/null \
+              | sed -nE 's/^ *version: *([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -n 1)
+            if [ -n "$BASE_VERSION" ]; then
+              HIGHEST=$(printf '%s\n%s\n' "$BASE_VERSION" "$VERSION" | sort -V | tail -n 1)
+              if [ "$HIGHEST" != "$VERSION" ]; then
+                echo "::error::Version '${VERSION}' in kmcifs-client/module.yaml cannot be downgraded from '${BASE_VERSION}' on '${{ github.base_ref }}'."
+                exit 1
+              fi
+            fi
+          fi
+
   linux:
     name: Linux (JVM / Android / Linux)
     needs: verify-lock

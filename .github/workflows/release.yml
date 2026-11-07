@@ -53,7 +53,7 @@ jobs:
             echo "tag=dry-run" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Guard against existing tag and create Draft Release
+      - name: Guard against existing or older version and create Draft Release
         if: steps.meta.outputs.is_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -63,6 +63,19 @@ jobs:
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "::error::Tag '$TAG' (from kmcifs-client/module.yaml version '${VERSION}') already exists. Please update 'version' in kmcifs-client/module.yaml before running Release."
             exit 1
+          fi
+
+          LATEST_VERSION=$(git ls-remote --tags --refs origin "refs/tags/v[0-9]*.[0-9]*.[0-9]*" \
+            | awk '{sub("refs/tags/v", "", $2); print $2}' \
+            | sort -V \
+            | tail -n 1)
+
+          if [ -n "$LATEST_VERSION" ]; then
+            HIGHEST=$(printf '%s\n%s\n' "$LATEST_VERSION" "$VERSION" | sort -V | tail -n 1)
+            if [ "$VERSION" = "$LATEST_VERSION" ] || [ "$HIGHEST" != "$VERSION" ]; then
+              echo "::error::Version '${VERSION}' in kmcifs-client/module.yaml must be newer than the latest released version 'v${LATEST_VERSION}'."
+              exit 1
+            fi
           fi
 
           if gh release view "$TAG" >/dev/null 2>&1; then
