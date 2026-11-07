@@ -256,6 +256,9 @@ jobs:
     needs: [prepare, build-linux, build-windows, build-macos]
     if: needs.prepare.outputs.is_release == 'true'
     runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}
     permissions:
       contents: write
       actions: write

@@ -143,6 +143,7 @@ jobs:
     needs: [linux, windows, macos]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: macos-latest
+    environment: snapshot
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4.4.0
