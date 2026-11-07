@@ -40,7 +40,7 @@ fun generateDokkaHtml(
         .filter { it.exists() && it.isRegularFile() }
         .map { it.toFile() }
 
-    val moduleVersion = readModuleVersion(moduleRootDir.resolve("module.yaml")) ?: "0.0.1"
+    val moduleVersion = readModuleVersion(moduleRootDir.resolve("module.yaml")) ?: "0.0.0"
 
     val configuration = DokkaConfigurationImpl(
         moduleName = moduleName,

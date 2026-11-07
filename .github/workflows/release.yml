@@ -58,6 +58,11 @@ jobs:
             exit 1
           fi
 
+          if [ "$VERSION" = "0.0.0" ]; then
+            echo "::error::Version '0.0.0' cannot be released. Please update 'version' in kmcifs-client/module.yaml (e.g. to '0.0.1') before running Release."
+            exit 1
+          fi
+
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "::error::Tag '$TAG' (from kmcifs-client/module.yaml version '${VERSION}') already exists. Please update 'version' in kmcifs-client/module.yaml before running Release."
             exit 1
