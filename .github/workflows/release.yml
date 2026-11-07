@@ -1,9 +1,6 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
   pull_request:
     branches:
       - main
@@ -48,10 +45,7 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" != "true" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" != "true" ]]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
             echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
           else
@@ -59,27 +53,34 @@ jobs:
             echo "tag=dry-run" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create Git Tag and Draft Release
+      - name: Guard against existing tag and create Draft Release
         if: steps.meta.outputs.is_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Creating and pushing tag: $TAG"
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" -m "Release $TAG"
-            git push origin "refs/tags/$TAG"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag '$TAG' (from kmcifs-client/module.yaml version '${VERSION}') already exists. Please update 'version' in kmcifs-client/module.yaml before running Release."
+            exit 1
           fi
 
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --draft \
-              --verify-tag \
-              --title "$TAG" \
-              --generate-notes
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::GitHub Release '$TAG' already exists."
+            exit 1
           fi
+
+          echo "Creating and pushing tag: $TAG"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "refs/tags/$TAG"
+
+          gh release create "$TAG" \
+            --draft \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes
 
   build-linux:
     name: Build Release Assets (Linux / JVM / Android)
