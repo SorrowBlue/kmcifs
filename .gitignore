@@ -1,5 +1,7 @@
 # Amper / Build outputs
 build/
+site/
+.cache/
 .amper/
 .kotlin/
 .gradle/

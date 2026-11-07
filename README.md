@@ -27,6 +27,10 @@ Kotlin Multiplatform 向けの SMB2 / SMB3 クライアント実装。ビルド�
 # Dokka HTML API リファレンスの生成 (build/dokka/html/kmcifs-client/index.html)
 ./kotlin do dokka
 
+# Zensical ドキュメントサイトのビルド (build/site/index.html) とローカルプレビュー
+uvx --python 3.13 zensical build
+uvx --python 3.13 zensical serve
+
 # mavenLocal への公開
 ./kotlin publish mavenLocal
 
