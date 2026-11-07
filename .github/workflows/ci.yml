@@ -76,7 +76,7 @@ jobs:
     name: Publish SNAPSHOT to Maven Central
     needs: test-and-build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     environment: snapshot
     steps:
       - name: Checkout repository
@@ -97,7 +97,11 @@ jobs:
             exit 0
           fi
 
-          sed -i.bak -E "s/^( *version: *).*/\1${SNAPSHOT_VERSION}/" kmcifs-client/module.yaml
+          sed -i.bak -E \
+            -e "s/^( *version: *).*/\1${SNAPSHOT_VERSION}/" \
+            -e "s/^( *signArtifacts: *).*/\1false/" \
+            -e "/mavenCentral:/,/publishingMode:/ s/^( *enabled: *).*/\1false/" \
+            kmcifs-client/module.yaml
           rm -f kmcifs-client/module.yaml.bak
 
           printf "centralUsername=%s\ncentralPassword=%s\n" "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_PASSWORD" > local.properties

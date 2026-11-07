@@ -1,3 +1,5 @@
+description: Kotlin Multiplatform SMB2/SMB3 client library
+
 product:
   type: lib
   platforms:
@@ -31,6 +33,21 @@ settings:
     version: 0.0.1
     artifactId: kmcifs-client
     publishSources: true
+    signArtifacts: true
+    mavenCentral:
+      enabled: true
+      publishingMode: auto
+    pom:
+      url: https://github.com/sorrowblue/kmcifs
+      licenses:
+        - name: The Apache Software License, Version 2.0
+          url: https://www.apache.org/licenses/LICENSE-2.0.txt
+      developers:
+        - id: sorrowblue
+          name: SorrowBlue
+          email: sorrowblue.dev@gmail.com
+      scm:
+        url: https://github.com/sorrowblue/kmcifs
 
 repositories:
   - id: mavenLocal

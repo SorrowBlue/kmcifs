@@ -21,10 +21,8 @@ permissions:
 
 jobs:
   prepare:
-    name: Tag & Prepare Draft Release
+    name: Validate Release Version
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
       is_release: ${{ steps.meta.outputs.is_release }}
       tag: ${{ steps.kotlin.outputs.tag }}
@@ -48,7 +46,7 @@ jobs:
             echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Guard against existing or older version and create Draft Release
+      - name: Guard against non-main branch, existing tag, or older version
         if: steps.meta.outputs.is_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -83,7 +81,83 @@ jobs:
             exit 1
           fi
 
-          echo "Creating and pushing tag: $TAG"
+  verify-build:
+    name: Verify Release Build (${{ matrix.name }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: Linux / JVM / Android
+            os: ubuntu-latest
+            build_cmd: |
+              ./kotlin build -m kmcifs-client -p jvm -p android -p linuxX64 -p linuxArm64 -v release
+              ./kotlin build -m linuxApp -v release
+          - name: Windows x64
+            os: windows-latest
+            build_cmd: |
+              ./kotlin.bat build -m kmcifs-client -p mingwX64 -v release
+              ./kotlin.bat build -m windowsApp -v release
+          - name: macOS / iOS
+            os: macos-latest
+            build_cmd: |
+              ./kotlin build -m kmcifs-client -p macosArm64 -p iosArm64 -p iosSimulatorArm64 -v release
+              ./kotlin build -m macosApp -v release
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.4.0
+
+      - name: Set up Kotlin Toolchain
+        uses: $/.github/actions/setup-kotlin
+
+      - name: Build release targets
+        shell: bash
+        run: ${{ matrix.build_cmd }}
+
+  publish-release:
+    name: Publish to Maven Central & GitHub Release
+    needs: [prepare, verify-build]
+    if: needs.prepare.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}
+    permissions:
+      contents: write
+      actions: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.4.0
+
+      - name: Set up Kotlin Toolchain
+        uses: $/.github/actions/setup-kotlin
+
+      - name: Publish kmcifs-client to Maven Central
+        env:
+          KOTLIN_TOOLCHAIN_MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          KOTLIN_TOOLCHAIN_MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          KOTLIN_TOOLCHAIN_SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          KOTLIN_TOOLCHAIN_SIGNING_KEY_PASSPHRASE: ${{ secrets.SIGNING_KEY_PASSPHRASE }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          ./kotlin publish mavenCentral -m kmcifs-client
+          mkdir -p dist
+          cp build/tasks/_kmcifs-client_prepareMavenCentralBundle/kmcifs-client-central-bundle.zip \
+            "dist/kmcifs-client-${VERSION}-central-bundle.zip"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2.4.0
+        with:
+          subject-path: "dist/*"
+
+      - name: Create Tag and Publish Immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
@@ -95,83 +169,7 @@ jobs:
             --title "$TAG" \
             --generate-notes
 
-  build-assets:
-    name: Build Release Assets (${{ matrix.name }})
-    needs: prepare
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - name: Linux / JVM / Android
-            os: ubuntu-latest
-            build_cmd: |
-              ./kotlin build -m kmcifs-client -p jvm -p android -p linuxX64 -p linuxArm64 -v release
-              ./kotlin build -m linuxApp -v release
-              mkdir -p dist
-              tar -czf dist/kmcifs-linux-binaries.tar.gz -C build/tasks .
-          - name: Windows x64
-            os: windows-latest
-            build_cmd: |
-              ./kotlin.bat build -m kmcifs-client -p mingwX64 -v release
-              ./kotlin.bat build -m windowsApp -v release
-              mkdir -p dist
-              tar -a -cf dist/kmcifs-windowsApp-x64.zip build/tasks/_windowsApp_linkMingwX64*/*.exe
-          - name: macOS / iOS
-            os: macos-latest
-            build_cmd: |
-              ./kotlin build -m kmcifs-client -p macosArm64 -p iosArm64 -p iosSimulatorArm64 -v release
-              ./kotlin build -m macosApp -v release
-              mkdir -p dist
-              tar -czf dist/kmcifs-macos-binaries.tar.gz -C build/tasks .
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4.4.0
-        with:
-          ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.tag || github.ref }}
-
-      - name: Set up Kotlin Toolchain
-        uses: $/.github/actions/setup-kotlin
-
-      - name: Build release artifacts
-        shell: bash
-        run: ${{ matrix.build_cmd }}
-
-      - name: Attest build provenance
-        if: needs.prepare.outputs.is_release == 'true'
-        uses: actions/attest-build-provenance@v2.4.0
-        with:
-          subject-path: "dist/*"
-
-      - name: Upload assets to Draft Release
-        if: needs.prepare.outputs.is_release == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release upload "$TAG" dist/* --clobber
-
-  publish-release:
-    name: Publish Immutable Release
-    needs: [prepare, build-assets]
-    if: needs.prepare.outputs.is_release == 'true'
-    runs-on: ubuntu-latest
-    environment:
-      name: release
-      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}
-    permissions:
-      contents: write
-      actions: write
-    steps:
-      - name: Publish Draft Release (Lock as Immutable)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.prepare.outputs.tag }}
-        run: |
+          gh release upload "$TAG" dist/* --clobber
           gh release edit "$TAG" --draft=false
           echo "Published immutable release: $TAG"
           gh workflow run docs.yml
