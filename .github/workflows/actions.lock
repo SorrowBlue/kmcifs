@@ -20,6 +20,8 @@ workflows:
         - 'actions/attest-build-provenance@v2.4.0'
         - 'actions/cache@v4.3.0'
         - 'actions/checkout@v4.4.0'
+        - 'actions/download-artifact@v4.3.0'
+        - 'actions/upload-artifact@v4.6.2'
 dependencies:
     'actions/attest-build-provenance@1176ef556905f349f669722abf30bce1a6e16e01':
         ref: 'predicate@1.1.5'

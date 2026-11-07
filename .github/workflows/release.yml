@@ -81,8 +81,8 @@ jobs:
             exit 1
           fi
 
-  verify-build:
-    name: Verify Release Build (${{ matrix.name }})
+  build-samples:
+    name: Build Sample Executables (${{ matrix.name }})
     needs: prepare
     runs-on: ${{ matrix.os }}
     strategy:
@@ -90,20 +90,34 @@ jobs:
       matrix:
         include:
           - name: Linux / JVM / Android
+            artifact: samples-linux-jvm-android
             os: ubuntu-latest
             build_cmd: |
               ./kotlin build -m kmcifs-client -p jvm -p android -p linuxX64 -p linuxArm64 -v release
+              ./kotlin package -m jvmApp -f executable-jar -v release
+              ./kotlin build -m androidApp -v debug
               ./kotlin build -m linuxApp -v release
+              mkdir -p dist
+              cp build/tasks/_jvmApp_executableJarJvm/jvmApp-jvm-executable.jar dist/kmcifs-sample-jvm.jar
+              cp build/tasks/_androidApp_buildAndroidDebug/gradle-project-debug.apk dist/kmcifs-sample-android.apk
+              cp build/tasks/_linuxApp_linkLinuxX64Release/linuxApp.kexe dist/kmcifs-sample-linux-x64
+              cp build/tasks/_linuxApp_linkLinuxArm64Release/linuxApp.kexe dist/kmcifs-sample-linux-arm64
           - name: Windows x64
+            artifact: samples-windows
             os: windows-latest
             build_cmd: |
               ./kotlin.bat build -m kmcifs-client -p mingwX64 -v release
               ./kotlin.bat build -m windowsApp -v release
+              mkdir -p dist
+              cp build/tasks/_windowsApp_linkMingwX64Release/windowsApp.exe dist/kmcifs-sample-windows-x64.exe
           - name: macOS / iOS
+            artifact: samples-macos
             os: macos-latest
             build_cmd: |
               ./kotlin build -m kmcifs-client -p macosArm64 -p iosArm64 -p iosSimulatorArm64 -v release
               ./kotlin build -m macosApp -v release
+              mkdir -p dist
+              cp build/tasks/_macosApp_linkMacosArm64Release/macosApp.kexe dist/kmcifs-sample-macos-arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4.4.0
@@ -111,13 +125,20 @@ jobs:
       - name: Set up Kotlin Toolchain
         uses: $/.github/actions/setup-kotlin
 
-      - name: Build release targets
+      - name: Build release targets and sample executables
         shell: bash
         run: ${{ matrix.build_cmd }}
 
+      - name: Upload sample executables artifact
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*
+          if-no-files-found: error
+
   publish-release:
     name: Publish to Maven Central & GitHub Release
-    needs: [prepare, verify-build]
+    needs: [prepare, build-samples]
     if: needs.prepare.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     environment:
@@ -141,14 +162,16 @@ jobs:
           KOTLIN_TOOLCHAIN_MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           KOTLIN_TOOLCHAIN_SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
           KOTLIN_TOOLCHAIN_SIGNING_KEY_PASSPHRASE: ${{ secrets.SIGNING_KEY_PASSPHRASE }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          ./kotlin publish mavenCentral -m kmcifs-client
-          mkdir -p dist
-          cp build/tasks/_kmcifs-client_prepareMavenCentralBundle/kmcifs-client-central-bundle.zip \
-            "dist/kmcifs-client-${VERSION}-central-bundle.zip"
+        run: ./kotlin publish mavenCentral -m kmcifs-client
 
-      - name: Attest build provenance
+      - name: Download sample executables
+        uses: actions/download-artifact@v4.3.0
+        with:
+          pattern: samples-*
+          path: dist
+          merge-multiple: true
+
+      - name: Attest build provenance for sample executables
         uses: actions/attest-build-provenance@v2.4.0
         with:
           subject-path: "dist/*"
