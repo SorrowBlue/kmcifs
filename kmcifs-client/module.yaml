@@ -36,6 +36,14 @@ repositories:
   - id: mavenLocal
     url: mavenLocal
     publish: true
+  - id: centralSnapshots
+    url: https://central.sonatype.com/repository/maven-snapshots/
+    publish: true
+    resolve: false
+    credentials:
+      file: ../local.properties
+      usernameKey: centralUsername
+      passwordKey: centralPassword
 
 plugins:
   dokka: enabled
