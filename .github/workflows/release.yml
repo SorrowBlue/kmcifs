@@ -60,6 +60,11 @@ jobs:
           TAG: ${{ steps.meta.outputs.tag }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::Releases can only be created from the 'main' branch (current ref: '${{ github.ref }}')."
+            exit 1
+          fi
+
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "::error::Tag '$TAG' (from kmcifs-client/module.yaml version '${VERSION}') already exists. Please update 'version' in kmcifs-client/module.yaml before running Release."
             exit 1
