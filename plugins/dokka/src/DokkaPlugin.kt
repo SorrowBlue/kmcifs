@@ -65,16 +65,27 @@ fun generateDokkaHtml(
     val logger = DokkaConsoleLogger(LoggingLevel.PROGRESS)
     DokkaGenerator(configuration, logger).generate()
 
-    val convenientDir = moduleRootDir.parent?.resolve("build")?.resolve("dokka")?.resolve("html")?.resolve(moduleName)
+    val projectRoot = moduleRootDir.parent
+    val convenientDir = projectRoot?.resolve("build")?.resolve("dokka")?.resolve("html")?.resolve(moduleName)
     if (convenientDir != null) {
         runCatching {
             copyDirectory(outputDir, convenientDir)
         }
     }
 
+    val siteApiDir = projectRoot?.resolve("build")?.resolve("site")?.resolve("api")
+    if (siteApiDir != null) {
+        runCatching {
+            copyDirectory(outputDir, siteApiDir)
+        }
+    }
+
     println("Dokka HTML generated for '$moduleName': ${outputDir.resolve("index.html").toAbsolutePath()}")
     if (convenientDir != null) {
         println("Dokka HTML mirror: ${convenientDir.resolve("index.html").toAbsolutePath()}")
+    }
+    if (siteApiDir != null) {
+        println("Zensical API mirror: ${siteApiDir.resolve("index.html").toAbsolutePath()}")
     }
 }
 

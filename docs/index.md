@@ -2,7 +2,7 @@
 
 `kmcifs` は Kotlin Multiplatform 向けの SMB2 / SMB3 クライアントライブラリである。プラットフォーム固有のネイティブライブラリや OS 依存の暗号 API を一切使わず、`ktor-network` と `kotlinx-io` のみを土台として共通 Kotlin コードだけでプロトコル処理と暗号演算を実装している。
 
-対応ターゲットは JVM、Android（`minSdk 26`）、iOS（`iosArm64` / `iosSimulatorArm64`）、macOS（`macosArm64`）、Linux（`linuxX64` / `linuxArm64`）、Windows（`mingwX64`）の 8 環境。いずれのターゲットでも同一の API と通信挙動を提供する。
+対応ターゲットは JVM、Android（`minSdk 26`）、iOS（`iosArm64` / `iosSimulatorArm64`）、macOS（`macosArm64`）、Linux（`linuxX64` / `linuxArm64`）、Windows（`mingwX64`）の 8 環境。いずれのターゲットでも同一の API と通信挙動を提供する。クラス・メソッド単位の網羅的な仕様は [Dokka API リファレンス](api/index.html) を参照。
 
 ## 対応プロトコルと暗号仕様
 
