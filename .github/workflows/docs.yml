@@ -47,6 +47,8 @@ jobs:
             ~/.local/share/JetBrains/Kotlin
             ~/.m2/repository
           key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-kotlin-deps-
 
       - name: Build Zensical documentation site
         run: uvx --python 3.13 zensical build --clean

@@ -12,10 +12,13 @@ import org.jetbrains.dokka.DokkaSourceSetImpl
 import org.jetbrains.dokka.Platform
 import org.jetbrains.dokka.utilities.DokkaConsoleLogger
 import org.jetbrains.dokka.utilities.LoggingLevel
+import java.net.URLClassLoader
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.Comparator
 import kotlin.io.path.exists
+import kotlin.io.path.isDirectory
 import kotlin.io.path.isRegularFile
 
 @TaskAction
@@ -86,6 +89,57 @@ fun generateDokkaHtml(
     }
     if (siteApiDir != null) {
         println("Zensical API mirror: ${siteApiDir.resolve("index.html").toAbsolutePath()}")
+    }
+
+    runCatching {
+        pruneUnusedDokkaCache()
+    }
+}
+
+private fun pruneUnusedDokkaCache() {
+    val codeSourceUri = DokkaGenerator::class.java.protectionDomain?.codeSource?.location?.toURI() ?: return
+    val coreJarPath = Path.of(codeSourceUri).toAbsolutePath().normalize()
+    val activeVersionDir = coreJarPath.parent ?: return
+    val activeVersion = activeVersionDir.fileName?.toString() ?: return
+    val dokkaGroupDir = activeVersionDir.parent?.parent ?: return
+    if (dokkaGroupDir.fileName?.toString() != "dokka" || !dokkaGroupDir.isDirectory()) return
+
+    val activeDirs = (DokkaGenerator::class.java.classLoader as? URLClassLoader)
+        ?.urLs
+        ?.mapNotNull { url -> runCatching { Path.of(url.toURI()).toAbsolutePath().normalize().parent }.getOrNull() }
+        ?.filter { it.startsWith(dokkaGroupDir) }
+        ?.toSet()
+        .orEmpty()
+
+    Files.list(dokkaGroupDir).use { artifactStream ->
+        artifactStream.filter { it.isDirectory() }.forEach { artifactDir ->
+            Files.list(artifactDir).use { versionStream ->
+                versionStream.filter { it.isDirectory() }.forEach { versionDir ->
+                    val normalized = versionDir.toAbsolutePath().normalize()
+                    val shouldKeep = if (activeDirs.isNotEmpty()) {
+                        normalized in activeDirs
+                    } else {
+                        normalized.fileName?.toString() == activeVersion
+                    }
+                    if (!shouldKeep) {
+                        deleteDirectory(normalized)
+                        println("Pruned unused Dokka cache: $normalized")
+                    }
+                }
+            }
+            val isEmpty = Files.list(artifactDir).use { !it.findFirst().isPresent }
+            if (isEmpty) {
+                Files.deleteIfExists(artifactDir)
+            }
+        }
+    }
+}
+
+private fun deleteDirectory(dir: Path) {
+    Files.walk(dir).use { stream ->
+        stream.sorted(Comparator.reverseOrder()).forEach { path ->
+            Files.deleteIfExists(path)
+        }
     }
 }
 
