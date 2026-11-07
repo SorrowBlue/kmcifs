@@ -1,0 +1,11 @@
+product: ios/app
+
+dependencies:
+  - //sample
+  - $compose.runtime
+  - $compose.foundation
+  - $compose.material3
+
+settings:
+  compose:
+    enabled: true

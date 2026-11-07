@@ -1,0 +1,9 @@
+modules:
+  - kmcifs-client
+  - sample
+  - sample/androidApp
+  - sample/iosApp
+  - sample/jvmApp
+  - sample/linuxApp
+  - sample/macosApp
+  - sample/windowsApp

@@ -1,0 +1,30 @@
+# Amper / Build outputs
+build/
+.amper/
+.kotlin/
+.gradle/
+
+# IDE / Editor files
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# OS / Environment files
+.DS_Store
+Thumbs.db
+local.properties
+
+# Native / Mobile build artifacts & logs
+*.apk
+*.aab
+*.exe
+*.kexe
+*.dSYM/
+*.hprof
+*.log
+
+# Local encrypted credential files
+master.key
+connection.enc

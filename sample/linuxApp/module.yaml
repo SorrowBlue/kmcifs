@@ -1,0 +1,8 @@
+product:
+  type: linux/app
+  platforms:
+    - linuxX64
+    - linuxArm64
+
+dependencies:
+  - //sample

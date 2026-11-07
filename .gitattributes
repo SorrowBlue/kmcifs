@@ -1,0 +1,5 @@
+* text=auto
+kotlin text eol=lf
+*.sh text eol=lf
+kotlin.bat text eol=crlf
+*.bat text eol=crlf
