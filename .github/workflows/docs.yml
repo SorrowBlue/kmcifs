@@ -12,6 +12,7 @@ on:
       - "kotlin.bat"
       - "project.yaml"
       - "kmcifs-client/module.yaml"
+      - ".github/actions/setup-kotlin/**"
       - ".github/workflows/docs.yml"
       - ".github/workflows/actions.lock"
   pull_request:
@@ -25,6 +26,7 @@ on:
       - "kotlin.bat"
       - "project.yaml"
       - "kmcifs-client/module.yaml"
+      - ".github/actions/setup-kotlin/**"
       - ".github/workflows/docs.yml"
       - ".github/workflows/actions.lock"
   release:
@@ -69,6 +71,7 @@ jobs:
               - 'kotlin.bat'
               - 'project.yaml'
               - 'kmcifs-client/module.yaml'
+              - '.github/actions/setup-kotlin/**'
               - '.github/workflows/docs.yml'
               - '.github/workflows/actions.lock'
 
@@ -115,34 +118,15 @@ jobs:
     needs: changes
     if: needs.changes.outputs.dokka == 'true'
     runs-on: ubuntu-latest
-    env:
-      KOTLIN_CLI_NO_WELCOME_BANNER: "true"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4.4.0
 
-      - name: Cache Kotlin Toolchain CLI
-        uses: actions/cache@v4.3.0
-        with:
-          path: ~/.cache/JetBrains/Kotlin/cli
-          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin') }}
-
-      - name: Cache project and Dokka dependencies
-        uses: actions/cache@v4.3.0
-        with:
-          path: |
-            ~/.cache/JetBrains/Kotlin
-            !~/.cache/JetBrains/Kotlin/cli
-            ~/.local/share/JetBrains/Kotlin
-            ~/.m2/repository
-          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-kotlin-deps-
+      - name: Set up Kotlin Toolchain
+        uses: $/.github/actions/setup-kotlin
 
       - name: Generate Dokka API reference
-        run: |
-          chmod +x ./kotlin
-          ./kotlin do dokka
+        run: ./kotlin do dokka
 
       - name: Upload Dokka artifact
         if: needs.changes.outputs.deploy == 'true'

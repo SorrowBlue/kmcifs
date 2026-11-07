@@ -18,9 +18,6 @@ concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  KOTLIN_CLI_NO_WELCOME_BANNER: "true"
-
 jobs:
   verify-lock:
     name: Verify Actions Lockfile
@@ -36,111 +33,48 @@ jobs:
           gh extension install github/gh-actions-lock
           gh actions-lock --verify-local
 
-  linux:
-    name: Linux (JVM / Android / Linux)
+  test-and-build:
+    name: Test & Build (${{ matrix.name }})
     needs: verify-lock
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux / JVM / Android
+            os: ubuntu-latest
+            test_cmd: ./kotlin test -m kmcifs-client -p jvm -p android -p linuxX64
+            build_cmd: |
+              ./kotlin build -m kmcifs-client -p linuxArm64
+              ./kotlin build -m jvmApp -m linuxApp
+          - name: Windows (mingwX64)
+            os: windows-latest
+            test_cmd: ./kotlin.bat test -m kmcifs-client -p mingwX64
+            build_cmd: ./kotlin.bat build -m windowsApp
+          - name: macOS / iOS
+            os: macos-latest
+            test_cmd: ./kotlin test -m kmcifs-client -p macosArm64 -p iosSimulatorArm64
+            build_cmd: |
+              ./kotlin build -m kmcifs-client -p iosArm64
+              ./kotlin build -m macosApp
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4.4.0
 
-      - name: Cache Kotlin Toolchain CLI
-        uses: actions/cache@v4.3.0
-        with:
-          path: ~/.cache/JetBrains/Kotlin/cli
-          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin') }}
+      - name: Set up Kotlin Toolchain
+        uses: $/.github/actions/setup-kotlin
 
-      - name: Cache Kotlin dependencies
-        uses: actions/cache@v4.3.0
-        with:
-          path: |
-            ~/.cache/JetBrains/Kotlin
-            !~/.cache/JetBrains/Kotlin/cli
-            ~/.local/share/JetBrains/Kotlin
-            ~/.m2/repository
-          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-kotlin-deps-
+      - name: Run kmcifs-client tests
+        shell: bash
+        run: ${{ matrix.test_cmd }}
 
-      - name: Run kmcifs-client tests (JVM, Android, linuxX64)
-        run: |
-          chmod +x ./kotlin
-          ./kotlin test -m kmcifs-client -p jvm -p android -p linuxX64
-
-      - name: Build linuxArm64 library and Linux/JVM samples
-        run: |
-          ./kotlin build -m kmcifs-client -p linuxArm64
-          ./kotlin build -m jvmApp -m linuxApp
-
-  windows:
-    name: Windows (mingwX64)
-    needs: verify-lock
-    runs-on: windows-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4.4.0
-
-      - name: Cache Kotlin Toolchain CLI
-        uses: actions/cache@v4.3.0
-        with:
-          path: ~/AppData/Local/JetBrains/Kotlin/cli
-          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin.bat') }}
-
-      - name: Cache Kotlin dependencies
-        uses: actions/cache@v4.3.0
-        with:
-          path: |
-            ~/AppData/Local/JetBrains/Kotlin
-            !~/AppData/Local/JetBrains/Kotlin/cli
-            ~/.m2/repository
-          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-kotlin-deps-
-
-      - name: Run kmcifs-client tests (mingwX64)
-        run: .\kotlin.bat test -m kmcifs-client -p mingwX64
-
-      - name: Build Windows sample app
-        run: .\kotlin.bat build -m windowsApp
-
-  macos:
-    name: macOS (Apple Silicon / iOS)
-    needs: verify-lock
-    runs-on: macos-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4.4.0
-
-      - name: Cache Kotlin Toolchain CLI
-        uses: actions/cache@v4.3.0
-        with:
-          path: ~/Library/Caches/JetBrains/Kotlin/cli
-          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin') }}
-
-      - name: Cache Kotlin dependencies
-        uses: actions/cache@v4.3.0
-        with:
-          path: |
-            ~/Library/Caches/JetBrains/Kotlin
-            !~/Library/Caches/JetBrains/Kotlin/cli
-            ~/.m2/repository
-          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-kotlin-deps-
-
-      - name: Run kmcifs-client tests (macosArm64, iosSimulatorArm64)
-        run: |
-          chmod +x ./kotlin
-          ./kotlin test -m kmcifs-client -p macosArm64 -p iosSimulatorArm64
-
-      - name: Build iosArm64 library and macOS sample app
-        run: |
-          ./kotlin build -m kmcifs-client -p iosArm64
-          ./kotlin build -m macosApp
+      - name: Build targets and sample apps
+        shell: bash
+        run: ${{ matrix.build_cmd }}
 
   publish-snapshot:
     name: Publish SNAPSHOT to Maven Central
-    needs: [linux, windows, macos]
+    needs: test-and-build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: macos-latest
     environment: snapshot
@@ -148,39 +82,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4.4.0
 
-      - name: Cache Kotlin Toolchain CLI
-        uses: actions/cache@v4.3.0
-        with:
-          path: ~/Library/Caches/JetBrains/Kotlin/cli
-          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin') }}
-
-      - name: Cache Kotlin dependencies
-        uses: actions/cache@v4.3.0
-        with:
-          path: |
-            ~/Library/Caches/JetBrains/Kotlin
-            !~/Library/Caches/JetBrains/Kotlin/cli
-            ~/.m2/repository
-          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-kotlin-deps-
+      - name: Set up Kotlin Toolchain
+        id: kotlin
+        uses: $/.github/actions/setup-kotlin
 
       - name: Publish SNAPSHOT to Central Portal Snapshots
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          SNAPSHOT_VERSION: ${{ steps.kotlin.outputs.snapshot_version }}
         run: |
-          CURRENT_VERSION=$(sed -nE 's/^ *version: *([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' kmcifs-client/module.yaml | head -n 1)
-          if [ -z "$CURRENT_VERSION" ]; then
-            echo "::error::Failed to parse version from kmcifs-client/module.yaml"
-            exit 1
-          fi
-
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-          NEXT_PATCH=$((PATCH + 1))
-          SNAPSHOT_VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-SNAPSHOT"
-          echo "Computed SNAPSHOT version: ${CURRENT_VERSION} -> ${SNAPSHOT_VERSION}"
-
           if [ -z "$MAVEN_CENTRAL_USERNAME" ] || [ -z "$MAVEN_CENTRAL_PASSWORD" ]; then
             echo "::notice::Skipping SNAPSHOT publication (${SNAPSHOT_VERSION}) because MAVEN_CENTRAL_USERNAME / MAVEN_CENTRAL_PASSWORD secrets are not configured."
             exit 0
@@ -190,7 +101,6 @@ jobs:
           rm -f kmcifs-client/module.yaml.bak
 
           printf "centralUsername=%s\ncentralPassword=%s\n" "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_PASSWORD" > local.properties
-          chmod +x ./kotlin
           ./kotlin publish centralSnapshots -m kmcifs-client
 
       - name: Clean up credentials file

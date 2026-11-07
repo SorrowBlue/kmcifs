@@ -1,0 +1,94 @@
+name: "Set up Kotlin Toolchain"
+description: "Configures Kotlin Toolchain CLI, permissions, version metadata, and dependency caches across Linux, macOS, and Windows."
+
+inputs:
+  cache:
+    description: "Whether to restore and save Kotlin Toolchain and dependency caches"
+    required: false
+    default: "true"
+
+outputs:
+  version:
+    description: "Current module version from kmcifs-client/module.yaml (e.g. 0.0.1)"
+    value: ${{ steps.meta.outputs.version }}
+  tag:
+    description: "Release tag corresponding to current version (e.g. v0.0.1)"
+    value: ${{ steps.meta.outputs.tag }}
+  snapshot_version:
+    description: "Next patch SNAPSHOT version (e.g. 0.0.2-SNAPSHOT)"
+    value: ${{ steps.meta.outputs.snapshot_version }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure environment, version metadata, and cache paths
+      id: meta
+      shell: bash
+      run: |
+        echo "KOTLIN_CLI_NO_WELCOME_BANNER=true" >> "$GITHUB_ENV"
+
+        if [ "$RUNNER_OS" != "Windows" ]; then
+          chmod +x ./kotlin
+        fi
+
+        VERSION=$(sed -nE 's/^ *version: *([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' kmcifs-client/module.yaml | head -n 1)
+        if [ -z "$VERSION" ]; then
+          echo "::error::Failed to parse version from kmcifs-client/module.yaml"
+          exit 1
+        fi
+
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+        NEXT_PATCH=$((PATCH + 1))
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "snapshot_version=${MAJOR}.${MINOR}.${NEXT_PATCH}-SNAPSHOT" >> "$GITHUB_OUTPUT"
+
+        case "$RUNNER_OS" in
+          Linux)
+            echo "cli_cache_path=~/.cache/JetBrains/Kotlin/cli" >> "$GITHUB_OUTPUT"
+            {
+              echo "deps_cache_path<<EOF"
+              echo "~/.cache/JetBrains/Kotlin"
+              echo "!~/.cache/JetBrains/Kotlin/cli"
+              echo "~/.local/share/JetBrains/Kotlin"
+              echo "~/.m2/repository"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            ;;
+          macOS)
+            echo "cli_cache_path=~/Library/Caches/JetBrains/Kotlin/cli" >> "$GITHUB_OUTPUT"
+            {
+              echo "deps_cache_path<<EOF"
+              echo "~/Library/Caches/JetBrains/Kotlin"
+              echo "!~/Library/Caches/JetBrains/Kotlin/cli"
+              echo "~/.m2/repository"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            ;;
+          Windows)
+            echo "cli_cache_path=~/AppData/Local/JetBrains/Kotlin/cli" >> "$GITHUB_OUTPUT"
+            {
+              echo "deps_cache_path<<EOF"
+              echo "~/AppData/Local/JetBrains/Kotlin"
+              echo "!~/AppData/Local/JetBrains/Kotlin/cli"
+              echo "~/.m2/repository"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            ;;
+        esac
+
+    - name: Cache Kotlin Toolchain CLI
+      if: inputs.cache == 'true'
+      uses: actions/cache@v4.3.0
+      with:
+        path: ${{ steps.meta.outputs.cli_cache_path }}
+        key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin', 'kotlin.bat') }}
+
+    - name: Cache Kotlin dependencies
+      if: inputs.cache == 'true'
+      uses: actions/cache@v4.3.0
+      with:
+        path: ${{ steps.meta.outputs.deps_cache_path }}
+        key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-kotlin-deps-

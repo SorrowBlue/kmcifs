@@ -5,6 +5,7 @@ on:
     branches:
       - main
     paths:
+      - ".github/actions/setup-kotlin/**"
       - ".github/workflows/release.yml"
       - ".github/workflows/actions.lock"
   workflow_dispatch:
@@ -18,9 +19,6 @@ on:
 permissions:
   contents: read
 
-env:
-  KOTLIN_CLI_NO_WELCOME_BANNER: "true"
-
 jobs:
   prepare:
     name: Tag & Prepare Draft Release
@@ -29,36 +27,33 @@ jobs:
       contents: write
     outputs:
       is_release: ${{ steps.meta.outputs.is_release }}
-      tag: ${{ steps.meta.outputs.tag }}
-      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.kotlin.outputs.tag }}
+      version: ${{ steps.kotlin.outputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4.4.0
 
-      - name: Read version from module.yaml and determine release context
+      - name: Read version metadata
+        id: kotlin
+        uses: $/.github/actions/setup-kotlin
+        with:
+          cache: "false"
+
+      - name: Determine release context
         id: meta
         run: |
-          VERSION=$(sed -nE 's/^ *version: *([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' kmcifs-client/module.yaml | head -n 1)
-          if [ -z "$VERSION" ]; then
-            echo "::error::Failed to parse version from kmcifs-client/module.yaml"
-            exit 1
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" != "true" ]]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
-            echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
-            echo "tag=dry-run" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Guard against existing or older version and create Draft Release
         if: steps.meta.outputs.is_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.meta.outputs.tag }}
-          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.kotlin.outputs.tag }}
+          VERSION: ${{ steps.kotlin.outputs.version }}
         run: |
           if [ "${{ github.ref }}" != "refs/heads/main" ]; then
             echo "::error::Releases can only be created from the 'main' branch (current ref: '${{ github.ref }}')."
@@ -100,45 +95,51 @@ jobs:
             --title "$TAG" \
             --generate-notes
 
-  build-linux:
-    name: Build Release Assets (Linux / JVM / Android)
+  build-assets:
+    name: Build Release Assets (${{ matrix.name }})
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
       id-token: write
       attestations: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: Linux / JVM / Android
+            os: ubuntu-latest
+            build_cmd: |
+              ./kotlin build -m kmcifs-client -p jvm -p android -p linuxX64 -p linuxArm64 -v release
+              ./kotlin build -m linuxApp -v release
+              mkdir -p dist
+              tar -czf dist/kmcifs-linux-binaries.tar.gz -C build/tasks .
+          - name: Windows x64
+            os: windows-latest
+            build_cmd: |
+              ./kotlin.bat build -m kmcifs-client -p mingwX64 -v release
+              ./kotlin.bat build -m windowsApp -v release
+              mkdir -p dist
+              tar -a -cf dist/kmcifs-windowsApp-x64.zip build/tasks/_windowsApp_linkMingwX64*/*.exe
+          - name: macOS / iOS
+            os: macos-latest
+            build_cmd: |
+              ./kotlin build -m kmcifs-client -p macosArm64 -p iosArm64 -p iosSimulatorArm64 -v release
+              ./kotlin build -m macosApp -v release
+              mkdir -p dist
+              tar -czf dist/kmcifs-macos-binaries.tar.gz -C build/tasks .
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4.4.0
         with:
           ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.tag || github.ref }}
 
-      - name: Cache Kotlin Toolchain CLI
-        uses: actions/cache@v4.3.0
-        with:
-          path: ~/.cache/JetBrains/Kotlin/cli
-          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin') }}
-
-      - name: Cache Kotlin dependencies
-        uses: actions/cache@v4.3.0
-        with:
-          path: |
-            ~/.cache/JetBrains/Kotlin
-            !~/.cache/JetBrains/Kotlin/cli
-            ~/.local/share/JetBrains/Kotlin
-            ~/.m2/repository
-          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-kotlin-deps-
+      - name: Set up Kotlin Toolchain
+        uses: $/.github/actions/setup-kotlin
 
       - name: Build release artifacts
-        run: |
-          chmod +x ./kotlin
-          ./kotlin build -m kmcifs-client -p jvm -p android -p linuxX64 -p linuxArm64 -v release
-          ./kotlin build -m linuxApp -v release
-          mkdir -p dist
-          tar -czf dist/kmcifs-linux-binaries.tar.gz -C build/tasks .
+        shell: bash
+        run: ${{ matrix.build_cmd }}
 
       - name: Attest build provenance
         if: needs.prepare.outputs.is_release == 'true'
@@ -148,109 +149,7 @@ jobs:
 
       - name: Upload assets to Draft Release
         if: needs.prepare.outputs.is_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release upload "$TAG" dist/* --clobber
-
-  build-windows:
-    name: Build Release Assets (Windows x64)
-    needs: prepare
-    runs-on: windows-latest
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4.4.0
-        with:
-          ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.tag || github.ref }}
-
-      - name: Cache Kotlin Toolchain CLI
-        uses: actions/cache@v4.3.0
-        with:
-          path: ~/AppData/Local/JetBrains/Kotlin/cli
-          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin.bat') }}
-
-      - name: Cache Kotlin dependencies
-        uses: actions/cache@v4.3.0
-        with:
-          path: |
-            ~/AppData/Local/JetBrains/Kotlin
-            !~/AppData/Local/JetBrains/Kotlin/cli
-            ~/.m2/repository
-          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-kotlin-deps-
-
-      - name: Build release artifacts
-        run: |
-          .\kotlin.bat build -m kmcifs-client -p mingwX64 -v release
-          .\kotlin.bat build -m windowsApp -v release
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path "build\tasks\_windowsApp_linkMingwX64*\*.exe" -DestinationPath "dist\kmcifs-windowsApp-x64.zip" -Force
-
-      - name: Attest build provenance
-        if: needs.prepare.outputs.is_release == 'true'
-        uses: actions/attest-build-provenance@v2.4.0
-        with:
-          subject-path: "dist/*"
-
-      - name: Upload assets to Draft Release
-        if: needs.prepare.outputs.is_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release upload "$env:TAG" dist/* --clobber
-
-  build-macos:
-    name: Build Release Assets (macOS / iOS)
-    needs: prepare
-    runs-on: macos-latest
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4.4.0
-        with:
-          ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.tag || github.ref }}
-
-      - name: Cache Kotlin Toolchain CLI
-        uses: actions/cache@v4.3.0
-        with:
-          path: ~/Library/Caches/JetBrains/Kotlin/cli
-          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin') }}
-
-      - name: Cache Kotlin dependencies
-        uses: actions/cache@v4.3.0
-        with:
-          path: |
-            ~/Library/Caches/JetBrains/Kotlin
-            !~/Library/Caches/JetBrains/Kotlin/cli
-            ~/.m2/repository
-          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-kotlin-deps-
-
-      - name: Build release artifacts
-        run: |
-          chmod +x ./kotlin
-          ./kotlin build -m kmcifs-client -p macosArm64 -p iosArm64 -p iosSimulatorArm64 -v release
-          ./kotlin build -m macosApp -v release
-          mkdir -p dist
-          tar -czf dist/kmcifs-macos-binaries.tar.gz -C build/tasks .
-
-      - name: Attest build provenance
-        if: needs.prepare.outputs.is_release == 'true'
-        uses: actions/attest-build-provenance@v2.4.0
-        with:
-          subject-path: "dist/*"
-
-      - name: Upload assets to Draft Release
-        if: needs.prepare.outputs.is_release == 'true'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
@@ -258,7 +157,7 @@ jobs:
 
   publish-release:
     name: Publish Immutable Release
-    needs: [prepare, build-linux, build-windows, build-macos]
+    needs: [prepare, build-assets]
     if: needs.prepare.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     environment:
