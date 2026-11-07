@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: "0 18 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  KOTLIN_CLI_NO_WELCOME_BANNER: "true"
+
+jobs:
+  verify-lock:
+    name: Verify Actions Lockfile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.4.0
+
+      - name: Verify actions.lock
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh extension install github/gh-actions-lock
+          gh actions-lock --verify-local
+
+  linux:
+    name: Linux (JVM / Android / Linux)
+    needs: verify-lock
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.4.0
+
+      - name: Cache Kotlin Toolchain CLI
+        uses: actions/cache@v4.3.0
+        with:
+          path: ~/.cache/JetBrains/Kotlin/cli
+          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin') }}
+
+      - name: Cache Kotlin dependencies
+        uses: actions/cache@v4.3.0
+        with:
+          path: |
+            ~/.cache/JetBrains/Kotlin
+            !~/.cache/JetBrains/Kotlin/cli
+            ~/.local/share/JetBrains/Kotlin
+            ~/.m2/repository
+          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-kotlin-deps-
+
+      - name: Run kmcifs-client tests (JVM, Android, linuxX64)
+        run: |
+          chmod +x ./kotlin
+          ./kotlin test -m kmcifs-client -p jvm -p android -p linuxX64
+
+      - name: Build linuxArm64 library and Linux/JVM samples
+        run: |
+          ./kotlin build -m kmcifs-client -p linuxArm64
+          ./kotlin build -m jvmApp -m linuxApp
+
+  windows:
+    name: Windows (mingwX64)
+    needs: verify-lock
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.4.0
+
+      - name: Cache Kotlin Toolchain CLI
+        uses: actions/cache@v4.3.0
+        with:
+          path: ~/AppData/Local/JetBrains/Kotlin/cli
+          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin.bat') }}
+
+      - name: Cache Kotlin dependencies
+        uses: actions/cache@v4.3.0
+        with:
+          path: |
+            ~/AppData/Local/JetBrains/Kotlin
+            !~/AppData/Local/JetBrains/Kotlin/cli
+            ~/.m2/repository
+          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-kotlin-deps-
+
+      - name: Run kmcifs-client tests (mingwX64)
+        run: .\kotlin.bat test -m kmcifs-client -p mingwX64
+
+      - name: Build Windows sample app
+        run: .\kotlin.bat build -m windowsApp
+
+  macos:
+    name: macOS (Apple Silicon / iOS)
+    needs: verify-lock
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.4.0
+
+      - name: Cache Kotlin Toolchain CLI
+        uses: actions/cache@v4.3.0
+        with:
+          path: ~/Library/Caches/JetBrains/Kotlin/cli
+          key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin') }}
+
+      - name: Cache Kotlin dependencies
+        uses: actions/cache@v4.3.0
+        with:
+          path: |
+            ~/Library/Caches/JetBrains/Kotlin
+            !~/Library/Caches/JetBrains/Kotlin/cli
+            ~/.m2/repository
+          key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', '**/module.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-kotlin-deps-
+
+      - name: Run kmcifs-client tests (macosArm64, iosSimulatorArm64)
+        run: |
+          chmod +x ./kotlin
+          ./kotlin test -m kmcifs-client -p macosArm64 -p iosSimulatorArm64
+
+      - name: Build iosArm64 library and macOS sample app
+        run: |
+          ./kotlin build -m kmcifs-client -p iosArm64
+          ./kotlin build -m macosApp

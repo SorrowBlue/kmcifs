@@ -1,45 +1,134 @@
-name: Deploy Documentation
+name: Documentation
 
 on:
   push:
     branches:
       - main
+    paths:
+      - "docs/**"
+      - "zensical.toml"
+      - "plugins/dokka/**"
+      - "kotlin"
+      - "kotlin.bat"
+      - "project.yaml"
+      - "kmcifs-client/module.yaml"
+      - ".github/workflows/docs.yml"
+      - ".github/workflows/actions.lock"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - "zensical.toml"
+      - "plugins/dokka/**"
+      - "kotlin"
+      - "kotlin.bat"
+      - "project.yaml"
+      - "kmcifs-client/module.yaml"
+      - ".github/workflows/docs.yml"
+      - ".github/workflows/actions.lock"
+  release:
+    types:
+      - published
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: docs-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  changes:
+    name: Detect Documentation Changes
+    runs-on: ubuntu-latest
+    outputs:
+      zensical: ${{ steps.decide.outputs.zensical }}
+      dokka: ${{ steps.decide.outputs.dokka }}
+      deploy: ${{ steps.decide.outputs.deploy }}
+    steps:
+      - name: Checkout repository
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        uses: actions/checkout@v4.4.0
+
+      - name: Filter changed paths
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        id: filter
+        uses: dorny/paths-filter@v3.0.4
+        with:
+          filters: |
+            zensical:
+              - 'docs/**'
+              - 'zensical.toml'
+              - '.github/workflows/docs.yml'
+              - '.github/workflows/actions.lock'
+            dokka:
+              - 'plugins/dokka/**'
+              - 'kotlin'
+              - 'kotlin.bat'
+              - 'project.yaml'
+              - 'kmcifs-client/module.yaml'
+              - '.github/workflows/docs.yml'
+              - '.github/workflows/actions.lock'
+
+      - name: Determine jobs to run
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "release" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "zensical=true" >> "$GITHUB_OUTPUT"
+            echo "dokka=true" >> "$GITHUB_OUTPUT"
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "zensical=${{ steps.filter.outputs.zensical }}" >> "$GITHUB_OUTPUT"
+            echo "dokka=${{ steps.filter.outputs.dokka }}" >> "$GITHUB_OUTPUT"
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  zensical:
+    name: Build Zensical Site
+    needs: changes
+    if: needs.changes.outputs.zensical == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.4.0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5.4.2
+        with:
+          enable-cache: true
+
+      - name: Build Zensical documentation site
+        run: uvx --python 3.13 zensical build --strict --clean
+
+      - name: Upload Zensical artifact
+        if: needs.changes.outputs.deploy == 'true'
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: zensical-site
+          path: build/site
+          retention-days: 1
+
+  dokka:
+    name: Build Dokka API Reference
+    needs: changes
+    if: needs.changes.outputs.dokka == 'true'
     runs-on: ubuntu-latest
     env:
       KOTLIN_CLI_NO_WELCOME_BANNER: "true"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
+        uses: actions/checkout@v4.4.0
 
       - name: Cache Kotlin Toolchain CLI
-        uses: actions/cache@v4
+        uses: actions/cache@v4.3.0
         with:
           path: ~/.cache/JetBrains/Kotlin/cli
           key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin') }}
 
       - name: Cache project and Dokka dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v4.3.0
         with:
           path: |
             ~/.cache/JetBrains/Kotlin
@@ -50,28 +139,55 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-kotlin-deps-
 
-      - name: Build Zensical documentation site
-        run: uvx --python 3.13 zensical build --clean
-
       - name: Generate Dokka API reference
         run: |
           chmod +x ./kotlin
           ./kotlin do dokka
-          mkdir -p build/site/api
-          cp -r build/dokka/html/kmcifs-client/* build/site/api/
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Upload Dokka artifact
+        if: needs.changes.outputs.deploy == 'true'
+        uses: actions/upload-artifact@v4.6.2
         with:
-          path: build/site
+          name: dokka-api
+          path: build/dokka/html/kmcifs-client
+          retention-days: 1
 
   deploy:
-    needs: build
+    name: Deploy to GitHub Pages
+    needs: [changes, zensical, dokka]
+    if: needs.changes.outputs.deploy == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5.0.0
+
+      - name: Download Zensical site artifact
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: zensical-site
+          path: build/site
+
+      - name: Download Dokka API artifact
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: dokka-api
+          path: build/site/api
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3.0.1
+        with:
+          path: build/site
+
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v4.0.5
