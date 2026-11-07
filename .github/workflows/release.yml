@@ -113,8 +113,8 @@ jobs:
             build_cmd: |
               ./kotlin.bat build -m kmcifs-client -p mingwX64 -v release
               ./kotlin.bat build -m windowsApp -v release
-              mkdir -p dist
-              cp build/tasks/_windowsApp_linkMingwX64Release/windowsApp.exe dist/kmcifs-sample-windows-x64.exe
+              New-Item -ItemType Directory -Force -Path dist | Out-Null
+              Copy-Item build/tasks/_windowsApp_linkMingwX64Release/windowsApp.exe dist/kmcifs-sample-windows-x64.exe
           - name: macOS / iOS
             artifact: samples-macos
             os: macos-latest
@@ -131,7 +131,6 @@ jobs:
         uses: $/.github/actions/setup-kotlin
 
       - name: Build release targets and sample executables
-        shell: bash
         run: ${{ matrix.build_cmd }}
 
       - name: Upload sample executables artifact

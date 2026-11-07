@@ -65,11 +65,9 @@ jobs:
         uses: $/.github/actions/setup-kotlin
 
       - name: Run kmcifs-client tests
-        shell: bash
         run: ${{ matrix.test_cmd }}
 
       - name: Build targets and sample apps
-        shell: bash
         run: ${{ matrix.build_cmd }}
 
   publish-snapshot:
