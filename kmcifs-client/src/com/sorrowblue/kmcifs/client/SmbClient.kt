@@ -6,6 +6,7 @@ import com.sorrowblue.kmcifs.client.crypto.Sha512
 import com.sorrowblue.kmcifs.client.crypto.Smb3Kdf
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readULongLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readUShortLE
+import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeULongLE
 import com.sorrowblue.kmcifs.client.protocol.DceRpcSrvSvc
 import com.sorrowblue.kmcifs.client.protocol.KtorTcpSmbTransport
 import com.sorrowblue.kmcifs.client.protocol.NtStatus
@@ -275,7 +276,6 @@ class SmbClient internal constructor(
         val cleanName = shareName.trim('/', '\\')
         val uncPath = "\\\\$host\\$cleanName"
         val req = SmbMessages.buildTreeConnectRequest(
-            messageId = allocateMessageId(1u),
             sessionId = sessionId,
             uncPath = uncPath,
         )
@@ -303,7 +303,6 @@ class SmbClient internal constructor(
     suspend fun connectIpcShare(): SmbPipeShare {
         val uncPath = "\\\\$host\\IPC$"
         val req = SmbMessages.buildTreeConnectRequest(
-            messageId = allocateMessageId(1u),
             sessionId = sessionId,
             uncPath = uncPath,
         )
@@ -324,7 +323,7 @@ class SmbClient internal constructor(
         )
     }
 
-    internal fun allocateMessageId(credits: UShort = 1u): ULong {
+    private fun allocateMessageId(credits: UShort = 1u): ULong {
         val id = nextMessageId
         nextMessageId += maxOf(1u, credits.toUInt()).toULong()
         return id
@@ -337,7 +336,6 @@ class SmbClient internal constructor(
      * 未読レスポンスが TCP バッファに残留して後続リクエストと混線しないよう [NonCancellable] でトランザクションを完結させる。
      */
     internal suspend fun executeCommand(plainRequest: ByteArray, forceEncrypt: Boolean = false): ByteArray {
-        val expectedMessageId = plainRequest.readULongLE(24)
         return mutex.withLock {
             withContext(NonCancellable) {
                 if (closed) {
@@ -345,6 +343,10 @@ class SmbClient internal constructor(
                 }
                 try {
                     withTimeout(config.requestTimeoutMillis) {
+                        val credits = plainRequest.readUShortLE(6)
+                        val expectedMessageId = allocateMessageId(credits)
+                        plainRequest.writeULongLE(24, expectedMessageId)
+
                         val shouldEncrypt = (isSessionEncrypted || forceEncrypt) &&
                             negotiatedDialect.isSmb3 &&
                             negotiatedCipher != null &&
@@ -359,7 +361,11 @@ class SmbClient internal constructor(
                             )
                         } else {
                             val key = signingKey
-                            if (key != null && !isGuestOrAnonymousSession && (serverSigningRequired || config.alwaysSign || negotiatedDialect.isSmb3)) {
+                            val commandCode = plainRequest.readUShortLE(12)
+                            val mustSign = serverSigningRequired ||
+                                config.alwaysSign ||
+                                (negotiatedDialect.isSmb3 && commandCode == SmbCommand.TREE_CONNECT.code)
+                            if (key != null && !isGuestOrAnonymousSession && mustSign) {
                                 SmbHeader.signPacket(plainRequest, negotiatedDialect, key)
                             }
                             plainRequest
@@ -367,6 +373,78 @@ class SmbClient internal constructor(
 
                         transport.sendPacket(wirePacket)
                         receiveAndUnwrapResponse(expectedMessageId)
+                    }
+                } catch (e: SmbException) {
+                    throw e
+                } catch (e: Throwable) {
+                    closed = true
+                    runCatching { transport.close() }
+                    throw e
+                }
+            }
+        }
+    }
+
+    /**
+     * 複数の関連する SMB2 リクエスト (`[CREATE, CLOSE]` など) を 1 つの Compound パケットにまとめて送受信し、
+     * 各リクエストに対応するレスポンス配列のリストを返す。
+     */
+    internal suspend fun executeCompoundCommands(
+        plainRequests: List<ByteArray>,
+        forceEncrypt: Boolean = false,
+    ): List<ByteArray> {
+        require(plainRequests.isNotEmpty()) { "plainRequests must not be empty" }
+        if (plainRequests.size == 1) {
+            return listOf(executeCommand(plainRequests[0], forceEncrypt))
+        }
+        return mutex.withLock {
+            withContext(NonCancellable) {
+                if (closed) {
+                    throw SmbException(NtStatus.STATUS_USER_SESSION_DELETED, "SMB client is already closed")
+                }
+                try {
+                    withTimeout(config.requestTimeoutMillis) {
+                        val expectedMessageIds = plainRequests.map { req ->
+                            val credits = req.readUShortLE(6)
+                            val msgId = allocateMessageId(credits)
+                            req.writeULongLE(24, msgId)
+                            msgId
+                        }
+
+                        val shouldEncrypt = (isSessionEncrypted || forceEncrypt) &&
+                            negotiatedDialect.isSmb3 &&
+                            negotiatedCipher != null &&
+                            encryptionKey != null
+
+                        val key = signingKey
+                        val signEach: ((ByteArray) -> Unit)? = if (!shouldEncrypt && key != null && !isGuestOrAnonymousSession) {
+                            { slice ->
+                                val commandCode = slice.readUShortLE(12)
+                                val mustSign = serverSigningRequired ||
+                                    config.alwaysSign ||
+                                    (negotiatedDialect.isSmb3 && commandCode == SmbCommand.TREE_CONNECT.code)
+                                if (mustSign) {
+                                    SmbHeader.signPacket(slice, negotiatedDialect, key)
+                                }
+                            }
+                        } else {
+                            null
+                        }
+
+                        val compoundPlain = SmbMessages.buildCompoundRelatedPacket(plainRequests, signEach)
+                        val wirePacket = if (shouldEncrypt) {
+                            SmbTransformHeader.encryptPacket(
+                                plainSmbPacket = compoundPlain,
+                                sessionId = sessionId,
+                                cipherId = negotiatedCipher!!,
+                                encryptionKey = encryptionKey!!,
+                            )
+                        } else {
+                            compoundPlain
+                        }
+
+                        transport.sendPacket(wirePacket)
+                        receiveAndUnwrapCompoundResponses(expectedMessageIds)
                     }
                 } catch (e: SmbException) {
                     throw e
@@ -443,6 +521,64 @@ class SmbClient internal constructor(
         }
     }
 
+    private suspend fun receiveAndUnwrapCompoundResponses(expectedMessageIds: List<ULong>): List<ByteArray> {
+        val expectedSet = expectedMessageIds.toHashSet()
+        val collected = HashMap<ULong, ByteArray>(expectedMessageIds.size)
+        val firstExpectedId = expectedMessageIds.first()
+        val minExpectedId = expectedMessageIds.min()
+
+        while (collected.size < expectedSet.size) {
+            val rawIncoming = transport.receivePacket()
+            val wasEncrypted = SmbTransformHeader.isTransformPacket(rawIncoming)
+            val plainResponse = if (wasEncrypted) {
+                val cipher = negotiatedCipher
+                    ?: throw IllegalStateException("Received encrypted SMB3 Transform packet before cipher was negotiated")
+                val decKey = decryptionKey
+                    ?: throw IllegalStateException("Received encrypted SMB3 Transform packet without decryption key")
+                SmbTransformHeader.decryptPacket(rawIncoming, cipher, decKey)
+            } else {
+                rawIncoming
+            }
+
+            val parts = SmbMessages.splitCompoundPacket(plainResponse)
+            for (part in parts) {
+                val header = SmbHeader.decode(part)
+                if (header.status == NtStatus.STATUS_PENDING && header.isAsync) {
+                    continue
+                }
+                if (header.messageId < minExpectedId || header.messageId !in expectedSet) {
+                    continue
+                }
+                if (!wasEncrypted && config.verifyServerSignatures && header.isSigned && !isGuestOrAnonymousSession) {
+                    val key = signingKey
+                    if (key != null && header.command != SmbCommand.SESSION_SETUP) {
+                        val valid = SmbHeader.verifyPacketSignature(part, negotiatedDialect, key)
+                        if (!valid) {
+                            throw SmbException(
+                                NtStatus.STATUS_ACCESS_DENIED,
+                                "Server SMB packet signature verification failed for ${header.command}"
+                            )
+                        }
+                    }
+                }
+                collected[header.messageId] = part
+
+                // 先頭コマンドがエラー終了し、サーバーが後続の関連レスポンスを省略して単一レスポンスのみ返した場合は即座に終了する
+                if (parts.size == 1 &&
+                    header.messageId == firstExpectedId &&
+                    header.status != NtStatus.STATUS_SUCCESS
+                ) {
+                    for (id in expectedMessageIds) {
+                        collected.putIfAbsent(id, part)
+                    }
+                    break
+                }
+            }
+        }
+
+        return expectedMessageIds.map { collected.getValue(it) }
+    }
+
     private fun updatePreauthHash(currentHash: ByteArray, packet: ByteArray): ByteArray {
         val combined = ByteArray(currentHash.size + packet.size)
         currentHash.copyInto(combined, 0)
@@ -459,7 +595,6 @@ class SmbClient internal constructor(
             if (sessionId != 0uL) {
                 runCatching {
                     val req = SmbMessages.buildLogoffRequest(
-                        messageId = allocateMessageId(1u),
                         sessionId = sessionId,
                     )
                     executeCommand(req)

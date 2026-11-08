@@ -3,6 +3,13 @@ package com.sorrowblue.kmcifs.client
 import com.sorrowblue.kmcifs.client.protocol.SmbFileId
 import com.sorrowblue.kmcifs.client.protocol.SmbFileMetadata
 import com.sorrowblue.kmcifs.client.protocol.SmbMessages
+import kotlinx.coroutines.runBlocking
+import kotlinx.io.Buffer
+import kotlinx.io.RawSink
+import kotlinx.io.RawSource
+import kotlinx.io.Sink
+import kotlinx.io.Source
+import kotlinx.io.buffered
 
 /**
  * オープン済みのリモート SMB ファイルハンドルを表すクラス。
@@ -39,22 +46,45 @@ class SmbFile internal constructor(
         }
 
         val buffer = ByteArray(length)
-        var totalRead = 0
-        while (totalRead < length) {
-            val toRead = minOf(maxChunk, length - totalRead)
-            val chunk = readSingleChunk(offset + totalRead, toRead)
-            if (chunk.isEmpty()) break
-            chunk.copyInto(buffer, totalRead)
-            totalRead += chunk.size
-            if (chunk.size < toRead) break
-        }
+        val totalRead = readInto(offset, buffer, 0, length)
         return if (totalRead == length) buffer else buffer.copyOf(totalRead)
     }
 
+    /**
+     * 指定したオフセットから最大 [length] バイトを読み取り、呼び出し元の [destination]（開始位置 [destinationOffset]）へ直接書き込む。
+     * 中間配列を生成しないゼロコピー読み取りを行い、実際に読み取られたバイト数（EOF 時は `0`）を返す。
+     */
+    suspend fun readInto(
+        offset: Long,
+        destination: ByteArray,
+        destinationOffset: Int = 0,
+        length: Int = destination.size - destinationOffset,
+    ): Int {
+        require(offset >= 0L) { "offset must be non-negative" }
+        require(destinationOffset >= 0 && length >= 0 && destinationOffset + length <= destination.size) {
+            "Invalid destination slice bounds"
+        }
+        if (length == 0) return 0
+
+        val maxChunk = share.client.maxReadSize.coerceAtMost(262144)
+        var totalRead = 0
+        while (totalRead < length) {
+            val toRead = minOf(maxChunk, length - totalRead)
+            val readCount = readSingleChunkInto(
+                offset = offset + totalRead,
+                destination = destination,
+                destinationOffset = destinationOffset + totalRead,
+                length = toRead,
+            )
+            if (readCount <= 0) break
+            totalRead += readCount
+            if (readCount < toRead) break
+        }
+        return totalRead
+    }
+
     private suspend fun readSingleChunk(offset: Long, length: Int): ByteArray {
-        val credits = maxOf(1, (length + 65535) / 65536).toUShort()
         val req = SmbMessages.buildReadRequest(
-            messageId = share.client.allocateMessageId(credits),
             sessionId = share.client.sessionId,
             treeId = share.treeId,
             fileId = fileId,
@@ -63,6 +93,23 @@ class SmbFile internal constructor(
         )
         val resp = share.client.executeCommand(req, share.encryptShare)
         return SmbMessages.parseReadResponse(resp)
+    }
+
+    private suspend fun readSingleChunkInto(
+        offset: Long,
+        destination: ByteArray,
+        destinationOffset: Int,
+        length: Int,
+    ): Int {
+        val req = SmbMessages.buildReadRequest(
+            sessionId = share.client.sessionId,
+            treeId = share.treeId,
+            fileId = fileId,
+            offset = offset,
+            length = length,
+        )
+        val resp = share.client.executeCommand(req, share.encryptShare)
+        return SmbMessages.parseReadResponseInto(resp, destination, destinationOffset, length)
     }
 
     /**
@@ -96,9 +143,7 @@ class SmbFile internal constructor(
         var totalWritten = 0
         while (totalWritten < length) {
             val chunkLen = minOf(maxChunk, length - totalWritten)
-            val credits = maxOf(1, (chunkLen + 65535) / 65536).toUShort()
             val req = SmbMessages.buildWriteRequest(
-                messageId = share.client.allocateMessageId(credits),
                 sessionId = share.client.sessionId,
                 treeId = share.treeId,
                 fileId = fileId,
@@ -143,7 +188,6 @@ class SmbFile internal constructor(
             flags = flags or SmbMessages.SMB2_LOCKFLAG_FAIL_IMMEDIATELY
         }
         val req = SmbMessages.buildLockRequest(
-            messageId = share.client.allocateMessageId(1u),
             sessionId = share.client.sessionId,
             treeId = share.treeId,
             fileId = fileId,
@@ -160,7 +204,6 @@ class SmbFile internal constructor(
      */
     suspend fun unlock(offset: Long = 0L, length: Long = Long.MAX_VALUE) {
         val req = SmbMessages.buildLockRequest(
-            messageId = share.client.allocateMessageId(1u),
             sessionId = share.client.sessionId,
             treeId = share.treeId,
             fileId = fileId,
@@ -178,7 +221,6 @@ class SmbFile internal constructor(
     suspend fun setLength(newSize: Long) {
         require(newSize >= 0L) { "newSize must be non-negative" }
         val req = SmbMessages.buildSetInfoRequest(
-            messageId = share.client.allocateMessageId(1u),
             sessionId = share.client.sessionId,
             treeId = share.treeId,
             fileId = fileId,
@@ -195,7 +237,6 @@ class SmbFile internal constructor(
      */
     suspend fun flush() {
         val req = SmbMessages.buildFlushRequest(
-            messageId = share.client.allocateMessageId(1u),
             sessionId = share.client.sessionId,
             treeId = share.treeId,
             fileId = fileId,
@@ -221,15 +262,166 @@ class SmbFile internal constructor(
     }
 
     /**
+     * このファイルを読み取る `kotlinx.io.RawSource` を返す。
+     *
+     * @param startOffset 読み取り開始オフセット（デフォルトは `0L`）
+     * @param closeFileOnClose `Source.close()` 時にこの [SmbFile] ハンドルも閉じる場合は `true`
+     */
+    fun asRawSource(
+        startOffset: Long = 0L,
+        closeFileOnClose: Boolean = true,
+    ): RawSource {
+        require(startOffset >= 0L) { "startOffset must be non-negative" }
+        return object : RawSource {
+            private var currentOffset = startOffset
+            private var sourceClosed = false
+            private val tempBuffer = ByteArray(64 * 1024)
+            private var bufPos = 0
+            private var bufLimit = 0
+
+            override fun readAtMostTo(sink: Buffer, byteCount: Long): Long {
+                check(!sourceClosed) { "Source is closed" }
+                if (byteCount <= 0L) return 0L
+
+                if (bufPos >= bufLimit) {
+                    if (currentOffset >= size) return -1L
+                    val fetchLen = minOf(size - currentOffset, tempBuffer.size.toLong()).toInt()
+                    if (fetchLen <= 0) return -1L
+
+                    val bytesRead = runBlocking {
+                        readInto(currentOffset, tempBuffer, 0, fetchLen)
+                    }
+                    if (bytesRead <= 0) return -1L
+
+                    currentOffset += bytesRead
+                    bufPos = 0
+                    bufLimit = bytesRead
+                }
+
+                val toCopy = minOf(byteCount, (bufLimit - bufPos).toLong()).toInt()
+                sink.write(tempBuffer, bufPos, bufPos + toCopy)
+                bufPos += toCopy
+                return toCopy.toLong()
+            }
+
+            override fun close() {
+                if (sourceClosed) return
+                sourceClosed = true
+                bufPos = 0
+                bufLimit = 0
+                if (closeFileOnClose) {
+                    this@SmbFile.close()
+                }
+            }
+        }
+    }
+
+    /**
+     * このファイルを読み取るバッファリング済みの `kotlinx.io.Source` を返す。
+     */
+    fun asSource(
+        startOffset: Long = 0L,
+        closeFileOnClose: Boolean = true,
+    ): Source = asRawSource(startOffset, closeFileOnClose).buffered()
+
+    /**
+     * このファイルへ書き込む `kotlinx.io.RawSink` を返す。
+     *
+     * @param startOffset 書き込み開始オフセット（デフォルトは `0L`）
+     * @param closeFileOnClose `Sink.close()` 時にこの [SmbFile] ハンドルも閉じる場合は `true`
+     */
+    fun asRawSink(
+        startOffset: Long = 0L,
+        closeFileOnClose: Boolean = true,
+    ): RawSink {
+        require(startOffset >= 0L) { "startOffset must be non-negative" }
+        return object : RawSink {
+            private var currentOffset = startOffset
+            private var sinkClosed = false
+            private val tempBuffer = ByteArray(64 * 1024)
+            private var bufLen = 0
+
+            private fun flushBuffer() {
+                if (bufLen <= 0) return
+                var offsetInBuf = 0
+                while (offsetInBuf < bufLen) {
+                    val toWrite = bufLen - offsetInBuf
+                    val written = runBlocking {
+                        this@SmbFile.write(currentOffset, tempBuffer, offsetInBuf, toWrite)
+                    }
+                    check(written > 0) { "Failed to write remaining bytes to SMB file at offset $currentOffset" }
+                    currentOffset += written
+                    offsetInBuf += written
+                }
+                bufLen = 0
+            }
+
+            override fun write(source: Buffer, byteCount: Long) {
+                check(!sinkClosed) { "Sink is closed" }
+                var remaining = byteCount
+                while (remaining > 0L) {
+                    val space = tempBuffer.size - bufLen
+                    val toRead = minOf(remaining, space.toLong()).toInt()
+                    val readCount = source.readAtMostTo(tempBuffer, bufLen, bufLen + toRead)
+                    if (readCount <= 0) break
+                    bufLen += readCount
+                    remaining -= readCount
+                    if (bufLen == tempBuffer.size) {
+                        flushBuffer()
+                    }
+                }
+            }
+
+            override fun flush() {
+                check(!sinkClosed) { "Sink is closed" }
+                flushBuffer()
+                runBlocking {
+                    this@SmbFile.flush()
+                }
+            }
+
+            override fun close() {
+                if (sinkClosed) return
+                val flushError = runCatching {
+                    flushBuffer()
+                    runBlocking {
+                        this@SmbFile.flush()
+                    }
+                }.exceptionOrNull()
+                sinkClosed = true
+                if (closeFileOnClose) {
+                    runCatching { this@SmbFile.close() }
+                }
+                if (flushError != null) {
+                    throw flushError
+                }
+            }
+        }
+    }
+
+    /**
+     * このファイルへ書き込むバッファリング済みの `kotlinx.io.Sink` を返す。
+     */
+    fun asSink(
+        startOffset: Long = 0L,
+        closeFileOnClose: Boolean = true,
+    ): Sink = asRawSink(startOffset, closeFileOnClose).buffered()
+
+    /**
      * ファイルハンドルをサーバー上で閉じる (`SMB2 CLOSE`)。
      */
     suspend fun closeSuspend() {
         if (closed) return
         closed = true
-        share.closeFileId(fileId)
+        runCatching {
+            share.closeFileId(fileId)
+        }
     }
 
     override fun close() {
-        closed = true
+        if (closed) return
+        runBlocking {
+            closeSuspend()
+        }
     }
 }

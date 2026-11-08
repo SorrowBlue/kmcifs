@@ -7,9 +7,13 @@ import com.sorrowblue.kmcifs.client.protocol.SmbCreateOptions
 import com.sorrowblue.kmcifs.client.protocol.SmbDirectoryEntry
 import com.sorrowblue.kmcifs.client.protocol.SmbException
 import com.sorrowblue.kmcifs.client.protocol.SmbFileAttributes
+import com.sorrowblue.kmcifs.client.protocol.SmbFileId
 import com.sorrowblue.kmcifs.client.protocol.SmbFileMetadata
 import com.sorrowblue.kmcifs.client.protocol.SmbMessages
 import com.sorrowblue.kmcifs.client.protocol.SmbShareAccess
+import kotlinx.coroutines.runBlocking
+import kotlinx.io.Sink
+import kotlinx.io.Source
 
 /**
  * 接続済みの SMB 共有フォルダ（Tree Connect）に対するファイル・ディレクトリ操作を提供するクラス。
@@ -28,10 +32,17 @@ class SmbShare internal constructor(
      *
      * @param path 共有ルートからの相対パス（ルートの場合は `""` または `"/"`）
      * @param pattern 検索ワイルドカード（デフォルトは `"*"`）
+     * @param bufferSize 1回の `QUERY_DIRECTORY` リクエストで要求する最大バッファサイズ（バイト）
      */
-    suspend fun listDirectory(path: String = "", pattern: String = "*"): List<SmbDirectoryEntry> {
+    suspend fun listDirectory(
+        path: String = "",
+        pattern: String = "*",
+        bufferSize: Int = client.config.queryDirectoryBufferSize,
+    ): List<SmbDirectoryEntry> {
+        require(bufferSize > 0) { "bufferSize must be positive: $bufferSize" }
+        val queryBufLen = minOf(client.maxTransactSize, bufferSize)
+
         val createReq = SmbMessages.buildCreateRequest(
-            messageId = client.allocateMessageId(1u),
             sessionId = client.sessionId,
             treeId = treeId,
             path = path,
@@ -41,30 +52,37 @@ class SmbShare internal constructor(
             createDisposition = SmbCreateDisposition.FILE_OPEN,
             createOptions = SmbCreateOptions.FILE_DIRECTORY_FILE or SmbCreateOptions.FILE_SYNCHRONOUS_IO_NONALERT,
         )
-        val createResp = SmbMessages.parseCreateResponse(client.executeCommand(createReq, encryptShare))
+        val firstQueryReq = SmbMessages.buildQueryDirectoryRequest(
+            sessionId = client.sessionId,
+            treeId = treeId,
+            fileId = SmbFileId.COMPOUND_RELATED,
+            searchPattern = pattern,
+            flags = 0x01u, // SMB2_RESTART_SCANS
+            outputBufferLength = queryBufLen,
+        )
+
+        val compoundResps = client.executeCompoundCommands(listOf(createReq, firstQueryReq), encryptShare)
+        val createResp = SmbMessages.parseCreateResponse(compoundResps[0])
         val dirFileId = createResp.fileId
 
         val entries = mutableListOf<SmbDirectoryEntry>()
         try {
-            var isFirstQuery = true
-            val queryBufLen = minOf(client.maxTransactSize, 65536)
-            val credits = maxOf(1, (queryBufLen + 65535) / 65536).toUShort()
-
-            while (true) {
-                val flags: UByte = if (isFirstQuery) 0x01u else 0x00u // SMB2_RESTART_SCANS on first query
-                isFirstQuery = false
-                val queryReq = SmbMessages.buildQueryDirectoryRequest(
-                    messageId = client.allocateMessageId(credits),
-                    sessionId = client.sessionId,
-                    treeId = treeId,
-                    fileId = dirFileId,
-                    searchPattern = pattern,
-                    flags = flags,
-                    outputBufferLength = queryBufLen,
-                )
-                val queryRespRaw = client.executeCommand(queryReq, encryptShare)
-                val batch = SmbMessages.parseQueryDirectoryResponse(queryRespRaw) ?: break
-                entries.addAll(batch)
+            val firstBatch = SmbMessages.parseQueryDirectoryResponse(compoundResps[1])
+            if (firstBatch != null) {
+                entries.addAll(firstBatch)
+                while (true) {
+                    val queryReq = SmbMessages.buildQueryDirectoryRequest(
+                        sessionId = client.sessionId,
+                        treeId = treeId,
+                        fileId = dirFileId,
+                        searchPattern = pattern,
+                        flags = 0x00u,
+                        outputBufferLength = queryBufLen,
+                    )
+                    val queryRespRaw = client.executeCommand(queryReq, encryptShare)
+                    val batch = SmbMessages.parseQueryDirectoryResponse(queryRespRaw) ?: break
+                    entries.addAll(batch)
+                }
             }
         } finally {
             closeFileId(dirFileId)
@@ -77,7 +95,6 @@ class SmbShare internal constructor(
      */
     suspend fun stat(path: String): SmbFileMetadata {
         val createReq = SmbMessages.buildCreateRequest(
-            messageId = client.allocateMessageId(1u),
             sessionId = client.sessionId,
             treeId = treeId,
             path = path,
@@ -87,8 +104,14 @@ class SmbShare internal constructor(
             createDisposition = SmbCreateDisposition.FILE_OPEN,
             createOptions = SmbCreateOptions.FILE_SYNCHRONOUS_IO_NONALERT,
         )
-        val createResp = SmbMessages.parseCreateResponse(client.executeCommand(createReq, encryptShare))
-        closeFileId(createResp.fileId)
+        val closeReq = SmbMessages.buildCloseRequest(
+            sessionId = client.sessionId,
+            treeId = treeId,
+            fileId = SmbFileId.COMPOUND_RELATED,
+        )
+        val responses = client.executeCompoundCommands(listOf(createReq, closeReq), encryptShare)
+        val createResp = SmbMessages.parseCreateResponse(responses[0])
+        SmbMessages.parseSimpleSuccessResponse(responses[1], "CLOSE")
         return createResp.metadata
     }
 
@@ -125,7 +148,6 @@ class SmbShare internal constructor(
         createOptions: UInt = SmbCreateOptions.FILE_NON_DIRECTORY_FILE or SmbCreateOptions.FILE_SYNCHRONOUS_IO_NONALERT,
     ): SmbFile {
         val createReq = SmbMessages.buildCreateRequest(
-            messageId = client.allocateMessageId(1u),
             sessionId = client.sessionId,
             treeId = treeId,
             path = path,
@@ -151,7 +173,7 @@ class SmbShare internal constructor(
     suspend fun openRandomAccessFile(
         path: String,
         mode: String = "r",
-        bufferSize: Int = SmbRandomAccessFile.DEFAULT_BUFFER_SIZE,
+        bufferSize: Int = client.config.randomAccessBufferSize,
     ): SmbRandomAccessFile {
         return SmbRandomAccessFile.open(
             share = this,
@@ -167,7 +189,7 @@ class SmbShare internal constructor(
     suspend fun openRandomAccessFile(
         path: String,
         mode: SmbRandomAccessMode,
-        bufferSize: Int = SmbRandomAccessFile.DEFAULT_BUFFER_SIZE,
+        bufferSize: Int = client.config.randomAccessBufferSize,
     ): SmbRandomAccessFile {
         return SmbRandomAccessFile.open(
             share = this,
@@ -175,6 +197,47 @@ class SmbShare internal constructor(
             mode = mode,
             bufferSize = bufferSize,
         )
+    }
+
+    /**
+     * 指定したパスのファイルを読み取る `kotlinx.io.Source` をオープンして返す。
+     * 返された `Source.close()` を呼ぶと背後の [SmbFile] ハンドルも閉じられる。
+     */
+    suspend fun openSource(path: String): Source {
+        val file = openFile(
+            path = path,
+            desiredAccess = SmbAccessMask.READ_DEFAULT,
+            shareAccess = SmbShareAccess.ALL,
+            createDisposition = SmbCreateDisposition.FILE_OPEN,
+        )
+        return file.asSource(startOffset = 0L, closeFileOnClose = true)
+    }
+
+    /**
+     * 指定したパスのファイルへ書き込む `kotlinx.io.Sink` をオープンして返す。
+     * 返された `Sink.close()` を呼ぶとフラッシュのうえ背後の [SmbFile] ハンドルも閉じられる。
+     *
+     * @param append `true` の場合は既存ファイルの末尾から追記する
+     * @param overwrite [append] が `false` のとき、`true` なら上書き作成（`FILE_OVERWRITE_IF`）、`false` なら新規作成のみ（`FILE_CREATE`）
+     */
+    suspend fun openSink(
+        path: String,
+        append: Boolean = false,
+        overwrite: Boolean = true,
+    ): Sink {
+        val disposition = when {
+            append -> SmbCreateDisposition.FILE_OPEN_IF
+            overwrite -> SmbCreateDisposition.FILE_OVERWRITE_IF
+            else -> SmbCreateDisposition.FILE_CREATE
+        }
+        val file = openFile(
+            path = path,
+            desiredAccess = SmbAccessMask.WRITE_DEFAULT,
+            shareAccess = SmbShareAccess.FILE_SHARE_READ,
+            createDisposition = disposition,
+        )
+        val startOffset = if (append) file.size else 0L
+        return file.asSink(startOffset = startOffset, closeFileOnClose = true)
     }
 
     /**
@@ -250,7 +313,6 @@ class SmbShare internal constructor(
      */
     suspend fun createDirectory(path: String) {
         val createReq = SmbMessages.buildCreateRequest(
-            messageId = client.allocateMessageId(1u),
             sessionId = client.sessionId,
             treeId = treeId,
             path = path,
@@ -278,10 +340,44 @@ class SmbShare internal constructor(
         deleteEntry(path, isDirectory = true)
     }
 
+    /**
+     * 指定したパスのファイル、またはディレクトリとその配下の全エントリを再帰的に削除する。
+     */
+    suspend fun deleteRecursively(path: String) {
+        val meta = try {
+            stat(path)
+        } catch (e: SmbException) {
+            if (e.ntStatus == NtStatus.STATUS_OBJECT_NAME_NOT_FOUND ||
+                e.ntStatus == NtStatus.STATUS_OBJECT_PATH_NOT_FOUND ||
+                e.ntStatus == NtStatus.STATUS_NO_SUCH_FILE
+            ) {
+                return
+            }
+            throw e
+        }
+        if (!meta.isDirectory) {
+            deleteFile(path)
+            return
+        }
+        deleteDirectoryTree(path.trim('/', '\\'))
+    }
+
+    private suspend fun deleteDirectoryTree(normalizedBase: String) {
+        val children = listDirectory(normalizedBase)
+        for (child in children) {
+            val childPath = if (normalizedBase.isEmpty()) child.name else "$normalizedBase/${child.name}"
+            if (child.isDirectory) {
+                deleteDirectoryTree(childPath)
+            } else {
+                deleteFile(childPath)
+            }
+        }
+        deleteDirectory(normalizedBase)
+    }
+
     private suspend fun deleteEntry(path: String, isDirectory: Boolean) {
         val dirFlag = if (isDirectory) SmbCreateOptions.FILE_DIRECTORY_FILE else SmbCreateOptions.FILE_NON_DIRECTORY_FILE
         val createReq = SmbMessages.buildCreateRequest(
-            messageId = client.allocateMessageId(1u),
             sessionId = client.sessionId,
             treeId = treeId,
             path = path,
@@ -294,7 +390,6 @@ class SmbShare internal constructor(
         val createResp = SmbMessages.parseCreateResponse(client.executeCommand(createReq, encryptShare))
         try {
             val setInfoReq = SmbMessages.buildSetInfoRequest(
-                messageId = client.allocateMessageId(1u),
                 sessionId = client.sessionId,
                 treeId = treeId,
                 fileId = createResp.fileId,
@@ -313,7 +408,6 @@ class SmbShare internal constructor(
      */
     suspend fun rename(fromPath: String, toPath: String, replaceIfExists: Boolean = true) {
         val createReq = SmbMessages.buildCreateRequest(
-            messageId = client.allocateMessageId(1u),
             sessionId = client.sessionId,
             treeId = treeId,
             path = fromPath,
@@ -326,7 +420,6 @@ class SmbShare internal constructor(
         val createResp = SmbMessages.parseCreateResponse(client.executeCommand(createReq, encryptShare))
         try {
             val setInfoReq = SmbMessages.buildSetInfoRequest(
-                messageId = client.allocateMessageId(1u),
                 sessionId = client.sessionId,
                 treeId = treeId,
                 fileId = createResp.fileId,
@@ -342,7 +435,6 @@ class SmbShare internal constructor(
 
     internal suspend fun closeFileId(fileId: com.sorrowblue.kmcifs.client.protocol.SmbFileId) {
         val closeReq = SmbMessages.buildCloseRequest(
-            messageId = client.allocateMessageId(1u),
             sessionId = client.sessionId,
             treeId = treeId,
             fileId = fileId,
@@ -359,7 +451,6 @@ class SmbShare internal constructor(
         disconnected = true
         runCatching {
             val req = SmbMessages.buildTreeDisconnectRequest(
-                messageId = client.allocateMessageId(1u),
                 sessionId = client.sessionId,
                 treeId = treeId,
             )
@@ -368,6 +459,9 @@ class SmbShare internal constructor(
     }
 
     override fun close() {
-        disconnected = true
+        if (disconnected) return
+        runBlocking {
+            closeSuspend()
+        }
     }
 }

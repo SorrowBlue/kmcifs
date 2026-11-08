@@ -7,6 +7,7 @@ import com.sorrowblue.kmcifs.client.protocol.SmbFileAttributes
 import com.sorrowblue.kmcifs.client.protocol.SmbFileId
 import com.sorrowblue.kmcifs.client.protocol.SmbMessages
 import com.sorrowblue.kmcifs.client.protocol.SmbShareAccess
+import kotlinx.coroutines.runBlocking
 
 /**
  * `IPC$` 共有（名前付きパイプ用ツリー接続）を表すクラス。
@@ -17,6 +18,7 @@ class SmbPipeShare internal constructor(
     val encryptShare: Boolean,
 ) : AutoCloseable {
 
+    @kotlin.concurrent.Volatile
     private var disconnected = false
 
     /**
@@ -25,7 +27,6 @@ class SmbPipeShare internal constructor(
     suspend fun openPipe(pipeName: String): SmbNamedPipe {
         val cleanName = pipeName.removePrefix("\\pipe\\").removePrefix("pipe\\").trimStart('/', '\\')
         val createReq = SmbMessages.buildCreateRequest(
-            messageId = client.allocateMessageId(1u),
             sessionId = client.sessionId,
             treeId = treeId,
             path = cleanName,
@@ -45,7 +46,6 @@ class SmbPipeShare internal constructor(
 
     internal suspend fun closeFileId(fileId: SmbFileId) {
         val closeReq = SmbMessages.buildCloseRequest(
-            messageId = client.allocateMessageId(1u),
             sessionId = client.sessionId,
             treeId = treeId,
             fileId = fileId,
@@ -59,7 +59,6 @@ class SmbPipeShare internal constructor(
         disconnected = true
         runCatching {
             val req = SmbMessages.buildTreeDisconnectRequest(
-                messageId = client.allocateMessageId(1u),
                 sessionId = client.sessionId,
                 treeId = treeId,
             )
@@ -68,7 +67,10 @@ class SmbPipeShare internal constructor(
     }
 
     override fun close() {
-        disconnected = true
+        if (disconnected) return
+        runBlocking {
+            closeSuspend()
+        }
     }
 }
 
@@ -81,15 +83,14 @@ class SmbNamedPipe internal constructor(
     val fileId: SmbFileId,
 ) : AutoCloseable {
 
+    @kotlin.concurrent.Volatile
     private var closed = false
 
     /**
      * `FSCTL_PIPE_TRANSCEIVE` (`SMB2 IOCTL`) を使用して、パイプへの書き込みと応答の読み取りを 1 往復で実行する。
      */
     suspend fun transceive(input: ByteArray, maxOutputLength: Int = 65536): ByteArray {
-        val credits = maxOf(1, (maxOf(input.size, maxOutputLength) + 65535) / 65536).toUShort()
         val req = SmbMessages.buildIoctlRequest(
-            messageId = pipeShare.client.allocateMessageId(credits),
             sessionId = pipeShare.client.sessionId,
             treeId = pipeShare.treeId,
             fileId = fileId,
@@ -105,9 +106,7 @@ class SmbNamedPipe internal constructor(
      * パイプへデータを書き込む (`SMB2 WRITE`)。
      */
     suspend fun write(data: ByteArray): Int {
-        val credits = maxOf(1, (data.size + 65535) / 65536).toUShort()
         val req = SmbMessages.buildWriteRequest(
-            messageId = pipeShare.client.allocateMessageId(credits),
             sessionId = pipeShare.client.sessionId,
             treeId = pipeShare.treeId,
             fileId = fileId,
@@ -122,9 +121,7 @@ class SmbNamedPipe internal constructor(
      * パイプからデータを読み取る (`SMB2 READ`)。
      */
     suspend fun read(maxLength: Int = 4280): ByteArray {
-        val credits = maxOf(1, (maxLength + 65535) / 65536).toUShort()
         val req = SmbMessages.buildReadRequest(
-            messageId = pipeShare.client.allocateMessageId(credits),
             sessionId = pipeShare.client.sessionId,
             treeId = pipeShare.treeId,
             fileId = fileId,
@@ -138,10 +135,15 @@ class SmbNamedPipe internal constructor(
     suspend fun closeSuspend() {
         if (closed) return
         closed = true
-        pipeShare.closeFileId(fileId)
+        runCatching {
+            pipeShare.closeFileId(fileId)
+        }
     }
 
     override fun close() {
-        closed = true
+        if (closed) return
+        runBlocking {
+            closeSuspend()
+        }
     }
 }
