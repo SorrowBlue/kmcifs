@@ -17,14 +17,22 @@ import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUShortLE
 import com.sorrowblue.kmcifs.client.protocol.NtStatus
 import com.sorrowblue.kmcifs.client.protocol.SmbCipherId
 import com.sorrowblue.kmcifs.client.protocol.SmbCommand
+import com.sorrowblue.kmcifs.client.protocol.SmbCreateOptions
 import com.sorrowblue.kmcifs.client.protocol.SmbDialect
+import com.sorrowblue.kmcifs.client.protocol.SmbException
 import com.sorrowblue.kmcifs.client.protocol.SmbFileAttributes
 import com.sorrowblue.kmcifs.client.protocol.SmbHeader
 import com.sorrowblue.kmcifs.client.protocol.SmbMessages
 import com.sorrowblue.kmcifs.client.protocol.SmbPacketTransport
 import com.sorrowblue.kmcifs.client.protocol.SmbShareType
 import com.sorrowblue.kmcifs.client.protocol.SmbTransformHeader
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.io.readString
+import kotlinx.io.writeString
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -174,21 +182,150 @@ class SmbClientEndToEndTest {
         raf.closeSuspend()
         assertFalse(raf.isOpen)
 
-        // 2. Re-open via SmbRandomAccessFile(share, path, "r").open() in read-only mode
-        val readOnlyRaf = SmbRandomAccessFile(share, "data/random.bin", "r").open()
-        assertEquals(6L, readOnlyRaf.length)
-        assertEquals('A'.code.toByte(), readOnlyRaf.readByte())
-        assertEquals(1L, readOnlyRaf.position)
+        // 2. Re-open via SmbRandomAccessFile(share, path, "r", bufferSize = 4).open() in buffered read-only mode
+        SmbRandomAccessFile(share, "data/random.bin", "r", bufferSize = 4).open().use { readOnlyRaf ->
+            assertEquals(6L, readOnlyRaf.length)
+            assertEquals('A'.code.toByte(), readOnlyRaf.readByte())
+            assertEquals(1L, readOnlyRaf.position)
 
-        val remaining = ByteArray(5)
-        readOnlyRaf.readFully(remaining)
-        assertEquals("BCxyz", remaining.decodeToString())
-        assertEquals(6L, readOnlyRaf.position)
+            val remaining = ByteArray(5)
+            readOnlyRaf.readFully(remaining)
+            assertEquals("BCxyz", remaining.decodeToString())
+            assertEquals(6L, readOnlyRaf.position)
 
-        assertFailsWith<IllegalStateException> {
-            readOnlyRaf.write(0x41)
+            assertFailsWith<IllegalStateException> {
+                readOnlyRaf.write(0x41)
+            }
         }
-        readOnlyRaf.closeSuspend()
+
+        share.closeSuspend()
+        client.closeSuspend()
+    }
+
+    @Test
+    fun testKotlinxIoSourceAndSink() = runTest {
+        val credentials = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
+        val mockTransport = MockSmb3ServerTransport(credentials)
+        val client = SmbClient("192.168.1.10", 445, SmbConfig(), mockTransport)
+        client.initializeSession(credentials)
+        val share = client.connectShare("PublicDocs")
+
+        // Write via kotlinx.io.Sink
+        share.openSink("streams/message.txt", overwrite = true).use { sink ->
+            sink.writeString("Hello ")
+            sink.flush()
+        }
+
+        // Append via kotlinx.io.Sink
+        share.openSink("streams/message.txt", append = true).use { sink ->
+            sink.writeString("kotlinx-io!")
+            sink.flush()
+        }
+
+        // Read via kotlinx.io.Source
+        val readBack = share.openSource("streams/message.txt").use { source ->
+            source.readString()
+        }
+        assertEquals("Hello kotlinx-io!", readBack)
+
+        share.close()
+        client.closeSuspend()
+    }
+
+    @Test
+    fun testDeleteRecursivelyAndPathNormalization() = runTest {
+        val credentials = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
+        val mockTransport = MockSmb3ServerTransport(credentials)
+        val client = SmbClient("192.168.1.10", 445, SmbConfig(), mockTransport)
+        client.initializeSession(credentials)
+        val share = client.connectShare("PublicDocs")
+
+        share.createDirectory("/books/")
+        share.createDirectory("/books/manga/")
+        share.writeText("/books/manga/vol1.txt", "Volume 1")
+        share.writeText("/books/manga/vol2.txt", "Volume 2")
+        share.writeText("/books/readme.txt", "Readme")
+
+        // Trailing slash in listDirectory & stat should be normalized properly
+        val mangaEntries = share.listDirectory("/books/manga/")
+        assertEquals(2, mangaEntries.size)
+        assertTrue(share.exists("/books/manga/vol1.txt/"))
+
+        // Recursive delete of /books/
+        share.deleteRecursively("/books/")
+        assertFalse(share.exists("/books/manga/vol1.txt"))
+        assertFalse(share.exists("/books/readme.txt"))
+        assertFalse(share.exists("/books"))
+
+        share.closeSuspend()
+        client.closeSuspend()
+    }
+
+    @Test
+    fun testPacketSigningVerificationAndErrorHandling() = runTest {
+        val credentials = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
+        val mockTransport = MockSmb3ServerTransport(credentials, encryptShare = false)
+        val config = SmbConfig(
+            encryptionPolicy = SmbEncryptionPolicy.DISABLED,
+            alwaysSign = true,
+            verifyServerSignatures = true,
+        )
+        val client = SmbClient("192.168.1.10", 445, config, mockTransport)
+        client.initializeSession(credentials)
+        val share = client.connectShare("PublicDocs")
+
+        share.writeText("signed.txt", "Signed payload")
+        assertEquals("Signed payload", share.readText("signed.txt"))
+
+        val ex = assertFailsWith<SmbException> {
+            share.stat("non_existent_file.txt")
+        }
+        assertEquals(NtStatus.STATUS_OBJECT_NAME_NOT_FOUND, ex.ntStatus)
+        assertFalse(share.exists("non_existent_file.txt"))
+
+        share.closeSuspend()
+        client.closeSuspend()
+    }
+
+    @Test
+    fun testConcurrentReadersAndOmittedCompoundErrorTail() = runTest {
+        val credentials = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
+        val mockTransport = MockSmb3ServerTransport(
+            expectedCredentials = credentials,
+            encryptShare = true,
+            omitRelatedErrorResponses = true,
+        )
+        val client = SmbClient("192.168.1.10", 445, SmbConfig(), mockTransport)
+        client.initializeSession(credentials)
+        val share = client.connectShare("PublicDocs")
+
+        // 1. 先頭 CREATE 失敗時にサーバーが後続 CLOSE のレスポンスを省略してもハングせず即座にエラー返却されることを検証
+        assertFalse(share.exists("missing_archive.cbz"))
+
+        // 2. 複数のスレッド/コルーチンから同一 SmbClient 上で並列にランダムアクセス読み取りを実行しても MessageId の競合が起きないことを検証
+        for (i in 0 until 4) {
+            share.writeBytes("archive_$i.bin", ByteArray(4096) { idx -> ((i * 31 + idx) and 0xFF).toByte() })
+        }
+
+        withContext(Dispatchers.Default) {
+            val jobs = (0 until 4).map { workerIdx ->
+                async {
+                    share.openRandomAccessFile("archive_$workerIdx.bin", "r", bufferSize = 0).use { raf ->
+                        val buf = ByteArray(128)
+                        for (step in 0 until 20) {
+                            val offset = (step * 173L) % (4096 - buf.size)
+                            raf.seek(offset)
+                            raf.readFully(buf)
+                            for (bIdx in buf.indices) {
+                                val expected = ((workerIdx * 31 + offset.toInt() + bIdx) and 0xFF).toByte()
+                                assertEquals(expected, buf[bIdx])
+                            }
+                        }
+                    }
+                }
+            }
+            jobs.awaitAll()
+        }
 
         share.closeSuspend()
         client.closeSuspend()
@@ -199,74 +336,137 @@ class SmbClientEndToEndTest {
      */
     private class MockSmb3ServerTransport(
         private val expectedCredentials: SmbCredentials,
+        private val encryptShare: Boolean = true,
+        private val omitRelatedErrorResponses: Boolean = false,
     ) : SmbPacketTransport {
 
         private val responseQueue = ArrayDeque<ByteArray>()
         private var preauthHash = ByteArray(64)
         private val serverChallenge = ByteArray(8) { (0x11 * (it + 1)).toByte() }
+        private var serverSigningKey: ByteArray? = null
         private var serverEncryptionKey: ByteArray? = null // ServerOutKey (SMBS2CCipherKey)
         private var serverDecryptionKey: ByteArray? = null // ServerInKey (SMBC2SCipherKey)
         private val sessionId: ULong = 0x1000200030004000uL
 
         private val files = mutableMapOf<String, ByteArray>()
+        private val directories = mutableSetOf("", "notes", "data", "streams")
         private val openHandles = mutableMapOf<ULong, String>()
         private val queriedDirs = mutableSetOf<ULong>()
         private var nextHandleId: ULong = 100uL
+        private var lastSeenMessageId: Long = -1L
 
         var encryptedPacketsCount: Int = 0
             private set
 
         override suspend fun sendPacket(packet: ByteArray) {
             val wasEncrypted = SmbTransformHeader.isTransformPacket(packet)
-            val plainReq = if (wasEncrypted) {
+            val plainPacket = if (wasEncrypted) {
                 encryptedPacketsCount++
                 SmbTransformHeader.decryptPacket(packet, SmbCipherId.AES_128_GCM, serverDecryptionKey!!)
             } else {
                 packet
             }
 
-            val reqHeader = SmbHeader.decode(plainReq)
-            val plainResp = when (reqHeader.command) {
-                SmbCommand.NEGOTIATE -> {
-                    preauthHash = updateHash(preauthHash, plainReq)
-                    val resp = buildNegotiateResponse(reqHeader.messageId)
-                    preauthHash = updateHash(preauthHash, resp)
-                    resp
-                }
-                SmbCommand.SESSION_SETUP -> {
-                    preauthHash = updateHash(preauthHash, plainReq)
-                    val secBufOffset = plainReq.readUShortLE(SmbHeader.SIZE + 12).toInt()
-                    val secBufLen = plainReq.readUShortLE(SmbHeader.SIZE + 14).toInt()
-                    val secBlob = plainReq.copyOfRange(secBufOffset, secBufOffset + secBufLen)
+            val reqParts = SmbMessages.splitCompoundPacket(plainPacket)
+            var lastCompoundHandleId: ULong = 0uL
+            var compoundFailedStatus: UInt = NtStatus.STATUS_SUCCESS
+            val respParts = mutableListOf<ByteArray>()
 
-                    if (reqHeader.sessionId == 0uL) {
-                        val resp = buildSessionSetupChallenge(reqHeader.messageId)
+            for ((partIndex, rawPart) in reqParts.withIndex()) {
+                val reqHeader = SmbHeader.decode(rawPart)
+                val msgIdLong = reqHeader.messageId.toLong()
+                check(msgIdLong > lastSeenMessageId) {
+                    "Out-of-order or duplicate MessageId detected: received=$msgIdLong, lastSeen=$lastSeenMessageId"
+                }
+                lastSeenMessageId = msgIdLong
+
+                val isRelated = (reqHeader.flags and SmbHeader.SMB2_FLAGS_RELATED_OPERATIONS) != 0u
+                if (partIndex > 0 && isRelated) {
+                    check(reqHeader.treeId == 0xFFFFFFFFu) {
+                        "Related compound request must have TreeId=0xFFFFFFFF (got ${reqHeader.treeId})"
+                    }
+                    check(reqHeader.sessionId == 0xFFFF_FFFF_FFFF_FFFFuL) {
+                        "Related compound request must have SessionId=0xFFFFFFFFFFFFFFFF (got ${reqHeader.sessionId})"
+                    }
+                }
+                if (isRelated && compoundFailedStatus != NtStatus.STATUS_SUCCESS) {
+                    if (omitRelatedErrorResponses) {
+                        continue
+                    }
+                    respParts.add(buildSimpleResponse(reqHeader, 8, compoundFailedStatus))
+                    continue
+                }
+
+                val plainReq = rawPart.copyOf()
+                // Replace sentinel FileId (0xFFFF_FFFF_FFFF_FFFF) in related requests with lastCompoundHandleId
+                if (isRelated && lastCompoundHandleId != 0uL) {
+                    replaceRelatedFileId(reqHeader.command, plainReq, lastCompoundHandleId)
+                }
+
+                val singleResp = when (reqHeader.command) {
+                    SmbCommand.NEGOTIATE -> {
+                        preauthHash = updateHash(preauthHash, plainReq)
+                        val resp = buildNegotiateResponse(reqHeader.messageId)
                         preauthHash = updateHash(preauthHash, resp)
                         resp
-                    } else {
-                        deriveSessionKeysFromType3(secBlob)
-                        buildSessionSetupSuccess(reqHeader.messageId)
                     }
-                }
-                SmbCommand.TREE_CONNECT -> buildTreeConnectResponse(reqHeader)
-                SmbCommand.TREE_DISCONNECT, SmbCommand.LOGOFF -> buildSimpleResponse(reqHeader, 4)
-                SmbCommand.CREATE -> handleCreate(reqHeader, plainReq)
-                SmbCommand.CLOSE, SmbCommand.FLUSH -> {
-                    val vId = plainReq.readULongLE(SmbHeader.SIZE + 16)
-                    if (reqHeader.command == SmbCommand.CLOSE) {
-                        openHandles.remove(vId)
-                        queriedDirs.remove(vId)
+                    SmbCommand.SESSION_SETUP -> {
+                        preauthHash = updateHash(preauthHash, plainReq)
+                        val secBufOffset = plainReq.readUShortLE(SmbHeader.SIZE + 12).toInt()
+                        val secBufLen = plainReq.readUShortLE(SmbHeader.SIZE + 14).toInt()
+                        val secBlob = plainReq.copyOfRange(secBufOffset, secBufOffset + secBufLen)
+
+                        if (reqHeader.sessionId == 0uL) {
+                            val resp = buildSessionSetupChallenge(reqHeader.messageId)
+                            preauthHash = updateHash(preauthHash, resp)
+                            resp
+                        } else {
+                            deriveSessionKeysFromType3(secBlob)
+                            buildSessionSetupSuccess(reqHeader.messageId)
+                        }
                     }
-                    buildSimpleResponse(reqHeader, if (reqHeader.command == SmbCommand.CLOSE) 60 else 4)
+                    SmbCommand.TREE_CONNECT -> buildTreeConnectResponse(reqHeader)
+                    SmbCommand.TREE_DISCONNECT, SmbCommand.LOGOFF -> buildSimpleResponse(reqHeader, 4)
+                    SmbCommand.CREATE -> {
+                        val resp = handleCreate(reqHeader, plainReq)
+                        val respHdr = SmbHeader.decode(resp)
+                        if (respHdr.status == NtStatus.STATUS_SUCCESS) {
+                            lastCompoundHandleId = resp.readULongLE(SmbHeader.SIZE + 72)
+                        } else {
+                            compoundFailedStatus = respHdr.status
+                        }
+                        resp
+                    }
+                    SmbCommand.CLOSE, SmbCommand.FLUSH -> {
+                        val vId = plainReq.readULongLE(SmbHeader.SIZE + 16)
+                        if (reqHeader.command == SmbCommand.CLOSE) {
+                            openHandles.remove(vId)
+                            queriedDirs.remove(vId)
+                        }
+                        buildSimpleResponse(reqHeader, if (reqHeader.command == SmbCommand.CLOSE) 60 else 4)
+                    }
+                    SmbCommand.WRITE -> handleWrite(reqHeader, plainReq)
+                    SmbCommand.READ -> handleRead(reqHeader, plainReq)
+                    SmbCommand.QUERY_DIRECTORY -> handleQueryDirectory(reqHeader, plainReq)
+                    SmbCommand.LOCK -> buildSimpleResponse(reqHeader, 4)
+                    SmbCommand.SET_INFO -> handleSetInfo(reqHeader, plainReq)
+                    SmbCommand.IOCTL -> handleIoctl(reqHeader, plainReq)
+                    else -> buildSimpleResponse(reqHeader, 4, NtStatus.STATUS_NOT_SUPPORTED)
                 }
-                SmbCommand.WRITE -> handleWrite(reqHeader, plainReq)
-                SmbCommand.READ -> handleRead(reqHeader, plainReq)
-                SmbCommand.QUERY_DIRECTORY -> handleQueryDirectory(reqHeader, plainReq)
-                SmbCommand.LOCK -> buildSimpleResponse(reqHeader, 4)
-                SmbCommand.SET_INFO -> handleSetInfo(reqHeader, plainReq)
-                SmbCommand.IOCTL -> handleIoctl(reqHeader, plainReq)
-                else -> buildSimpleResponse(reqHeader, 4, NtStatus.STATUS_NOT_SUPPORTED)
+                respParts.add(singleResp)
             }
+
+            val signEach: ((ByteArray) -> Unit)? = if (!wasEncrypted && serverSigningKey != null) {
+                { slice ->
+                    val hdr = SmbHeader.decode(slice)
+                    if (hdr.command != SmbCommand.NEGOTIATE && hdr.command != SmbCommand.SESSION_SETUP) {
+                        SmbHeader.signPacket(slice, SmbDialect.SMB_3_1_1, serverSigningKey!!)
+                    }
+                }
+            } else {
+                null
+            }
+            val plainResp = SmbMessages.buildCompoundRelatedPacket(respParts, signEach)
 
             val wireResp = if (wasEncrypted && serverEncryptionKey != null) {
                 SmbTransformHeader.encryptPacket(
@@ -279,6 +479,19 @@ class SmbClientEndToEndTest {
                 plainResp
             }
             responseQueue.addLast(wireResp)
+        }
+
+        private fun replaceRelatedFileId(command: SmbCommand, packet: ByteArray, handleId: ULong) {
+            val b = SmbHeader.SIZE
+            val fileIdOffset = when (command) {
+                SmbCommand.CLOSE, SmbCommand.FLUSH, SmbCommand.QUERY_DIRECTORY, SmbCommand.IOCTL -> b + 8
+                SmbCommand.READ, SmbCommand.WRITE, SmbCommand.SET_INFO -> b + 16
+                else -> return
+            }
+            if (packet.readULongLE(fileIdOffset) == 0xFFFF_FFFF_FFFF_FFFFuL) {
+                packet.writeULongLE(fileIdOffset, handleId)
+                packet.writeULongLE(fileIdOffset + 8, handleId)
+            }
         }
 
         override suspend fun receivePacket(): ByteArray = responseQueue.removeFirst()
@@ -389,6 +602,7 @@ class SmbClientEndToEndTest {
             }
 
             val derived = Smb3Kdf.deriveKeys(SmbDialect.SMB_3_1_1, exportedSessionKey, preauthHash)
+            serverSigningKey = derived.signingKey
             // From server's perspective: client's encryptionKey (C2S) is server's decryptionKey, and S2C is server's encryptionKey
             serverDecryptionKey = derived.encryptionKey
             serverEncryptionKey = derived.decryptionKey
@@ -406,7 +620,7 @@ class SmbClientEndToEndTest {
             header.encodeInto(packet, 0)
             val b = SmbHeader.SIZE
             packet.writeUShortLE(b, 9u)
-            packet.writeUShortLE(b + 2, SmbMessages.SMB2_SESSION_FLAG_ENCRYPT_DATA)
+            packet.writeUShortLE(b + 2, if (encryptShare) SmbMessages.SMB2_SESSION_FLAG_ENCRYPT_DATA else 0u)
             packet.writeUShortLE(b + 4, 72u)
             packet.writeUShortLE(b + 6, 0u)
             return packet
@@ -425,28 +639,38 @@ class SmbClientEndToEndTest {
             val b = SmbHeader.SIZE
             packet.writeUShortLE(b, 16u)
             packet[b + 2] = 0x01 // ShareType
-            packet.writeUIntLE(b + 4, SmbMessages.SMB2_SHAREFLAG_ENCRYPT_DATA)
+            packet.writeUIntLE(b + 4, if (encryptShare) SmbMessages.SMB2_SHAREFLAG_ENCRYPT_DATA else 0u)
             return packet
         }
 
         private fun handleCreate(reqHeader: SmbHeader, plainReq: ByteArray): ByteArray {
             val b = SmbHeader.SIZE
             val disposition = plainReq.readUIntLE(b + 36)
+            val createOptions = plainReq.readUIntLE(b + 40)
+            val isDirCreate = (createOptions and SmbCreateOptions.FILE_DIRECTORY_FILE) != 0u
             val nameOff = plainReq.readUShortLE(b + 44).toInt()
             val nameLen = plainReq.readUShortLE(b + 46).toInt()
             val path = if (nameLen > 0) plainReq.decodeFromUtf16LE(nameOff, nameLen) else ""
 
+            val isKnownDir = path in directories
+            val isKnownFile = files.containsKey(path)
+
             // disposition 1 = FILE_OPEN
-            if (disposition == 1u && path.isNotEmpty() && path != "srvsvc" && path != "notes" && !files.containsKey(path)) {
+            if (disposition == 1u && path.isNotEmpty() && path != "srvsvc" && !isKnownDir && !isKnownFile) {
                 return buildSimpleResponse(reqHeader, 8, NtStatus.STATUS_OBJECT_NAME_NOT_FOUND)
             }
-            if (disposition >= 2u && path.isNotEmpty() && path != "notes" && !files.containsKey(path)) {
-                files[path] = ByteArray(0)
+            if (disposition >= 2u && path.isNotEmpty()) {
+                if (isDirCreate) {
+                    directories.add(path)
+                } else if (!isKnownFile) {
+                    files[path] = ByteArray(0)
+                }
             }
 
             val handleId = nextHandleId++
             openHandles[handleId] = path
             val fileBytes = files[path] ?: ByteArray(0)
+            val isDirectory = isDirCreate || path in directories
 
             val packet = ByteArray(SmbHeader.SIZE + 88)
             val header = SmbHeader.withTreeId(
@@ -462,7 +686,7 @@ class SmbClientEndToEndTest {
             packet.writeULongLE(b + 48, fileBytes.size.toULong())
             packet.writeUIntLE(
                 b + 56,
-                if (path.isEmpty() || path == "notes") SmbFileAttributes.DIRECTORY else SmbFileAttributes.NORMAL
+                if (isDirectory) SmbFileAttributes.DIRECTORY else SmbFileAttributes.NORMAL
             )
             packet.writeULongLE(b + 64, handleId)
             packet.writeULongLE(b + 72, handleId)
@@ -532,20 +756,55 @@ class SmbClientEndToEndTest {
             }
             val dirPath = openHandles[handleId] ?: ""
             val prefix = if (dirPath.isEmpty()) "" else "$dirPath\\"
-            val matching = files.entries.firstOrNull { it.key.startsWith(prefix) }
-                ?: return buildSimpleResponse(reqHeader, 8, NtStatus.STATUS_NO_MORE_FILES)
 
-            val fileName = matching.key.removePrefix(prefix)
-            val nameBytes = fileName.encodeToUtf16LE()
-            val entryBuf = ByteArray(104 + nameBytes.size)
-            entryBuf.writeUIntLE(0, 0u) // NextEntryOffset = 0
-            entryBuf.writeULongLE(40, matching.value.size.toULong()) // EndOfFile
-            entryBuf.writeULongLE(48, matching.value.size.toULong()) // AllocationSize
-            entryBuf.writeUIntLE(56, SmbFileAttributes.NORMAL)
-            entryBuf.writeUIntLE(60, nameBytes.size.toUInt())
-            nameBytes.copyInto(entryBuf, 104)
+            data class RawEntry(val name: String, val size: Long, val isDir: Boolean)
+            val directEntries = mutableListOf<RawEntry>()
 
-            val packet = ByteArray(SmbHeader.SIZE + 8 + entryBuf.size)
+            for (d in directories) {
+                if (d.isNotEmpty() && d.startsWith(prefix)) {
+                    val rem = d.removePrefix(prefix)
+                    if ('\\' !in rem && rem.isNotEmpty()) {
+                        directEntries.add(RawEntry(rem, 0L, true))
+                    }
+                }
+            }
+            for ((fPath, fBytes) in files) {
+                if (fPath.startsWith(prefix)) {
+                    val rem = fPath.removePrefix(prefix)
+                    if ('\\' !in rem && rem.isNotEmpty()) {
+                        directEntries.add(RawEntry(rem, fBytes.size.toLong(), false))
+                    }
+                }
+            }
+
+            if (directEntries.isEmpty()) {
+                return buildSimpleResponse(reqHeader, 8, NtStatus.STATUS_NO_MORE_FILES)
+            }
+
+            val encodedEntries = directEntries.mapIndexed { idx, item ->
+                val nameBytes = item.name.encodeToUtf16LE()
+                val rawLen = 104 + nameBytes.size
+                val isLast = idx == directEntries.lastIndex
+                val paddedLen = if (isLast) rawLen else (rawLen + 7) and -8
+                val buf = ByteArray(paddedLen)
+                buf.writeUIntLE(0, if (isLast) 0u else paddedLen.toUInt())
+                buf.writeULongLE(40, item.size.toULong())
+                buf.writeULongLE(48, item.size.toULong())
+                buf.writeUIntLE(56, if (item.isDir) SmbFileAttributes.DIRECTORY else SmbFileAttributes.NORMAL)
+                buf.writeUIntLE(60, nameBytes.size.toUInt())
+                nameBytes.copyInto(buf, 104)
+                buf
+            }
+
+            val totalEntriesSize = encodedEntries.sumOf { it.size }
+            val allEntriesBuf = ByteArray(totalEntriesSize)
+            var pos = 0
+            for (eb in encodedEntries) {
+                eb.copyInto(allEntriesBuf, pos)
+                pos += eb.size
+            }
+
+            val packet = ByteArray(SmbHeader.SIZE + 8 + allEntriesBuf.size)
             val header = SmbHeader.withTreeId(
                 command = SmbCommand.QUERY_DIRECTORY,
                 messageId = reqHeader.messageId,
@@ -556,8 +815,8 @@ class SmbClientEndToEndTest {
             header.encodeInto(packet, 0)
             packet.writeUShortLE(b, 9u)
             packet.writeUShortLE(b + 2, (SmbHeader.SIZE + 8).toUShort())
-            packet.writeUIntLE(b + 4, entryBuf.size.toUInt())
-            entryBuf.copyInto(packet, SmbHeader.SIZE + 8)
+            packet.writeUIntLE(b + 4, allEntriesBuf.size.toUInt())
+            allEntriesBuf.copyInto(packet, SmbHeader.SIZE + 8)
             return packet
         }
 
@@ -572,6 +831,7 @@ class SmbClientEndToEndTest {
             when (infoClass) {
                 13 -> { // FileDispositionInformation (Delete)
                     files.remove(path)
+                    directories.remove(path)
                 }
                 10 -> { // FileRenameInformation
                     val newNameLen = plainReq.readUIntLE(bufOff + 16).toInt()
