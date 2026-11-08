@@ -20,7 +20,7 @@ import io.ktor.network.sockets.Socket
 import io.ktor.network.sockets.aSocket
 import io.ktor.network.sockets.openReadChannel
 import io.ktor.network.sockets.openWriteChannel
-import io.ktor.utils.io.readUTF8Line
+import io.ktor.utils.io.readLine
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -794,12 +794,12 @@ class SmbHttpRangeServer private constructor(
             val readChannel = socket.openReadChannel()
             val writeChannel = socket.openWriteChannel(autoFlush = false)
 
-            val requestLine = readChannel.readUTF8Line() ?: return
+            val requestLine = readChannel.readLine() ?: return
             val isHead = requestLine.startsWith("HEAD ", ignoreCase = true)
 
             var rangeHeader: String? = null
             while (true) {
-                val line = readChannel.readUTF8Line() ?: break
+                val line = readChannel.readLine() ?: break
                 if (line.isEmpty()) break
                 if (line.startsWith("Range:", ignoreCase = true)) {
                     rangeHeader = line.substringAfter(':').trim()
