@@ -29,7 +29,6 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -42,7 +41,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -72,17 +70,18 @@ import com.sorrowblue.kmcifs.sample.SmbConnectionSummary
 import com.sorrowblue.kmcifs.sample.SmbCredentialCipher
 import com.sorrowblue.kmcifs.sample.SmbDirectoryListing
 import com.sorrowblue.kmcifs.sample.SmbFormatUtils
+import com.sorrowblue.kmcifs.sample.SmbHttpRangeServer
 import com.sorrowblue.kmcifs.sample.SmbPreviewType
+import com.sorrowblue.kmcifs.sample.SmbRandomAccessStream
 import com.sorrowblue.kmcifs.sample.SmbSavedConnection
 import com.sorrowblue.kmcifs.sample.SmbTextFileContent
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.random.Random
 import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.addressOf
-import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.skia.Image as SkiaImage
@@ -90,13 +89,8 @@ import platform.AVFoundation.AVPlayer
 import platform.AVFoundation.AVPlayerLayer
 import platform.AVFoundation.pause
 import platform.AVFoundation.play
-import platform.Foundation.NSData
-import platform.Foundation.NSFileManager
-import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSURL
 import platform.Foundation.NSUserDefaults
-import platform.Foundation.create
-import platform.Foundation.writeToFile
 import platform.UIKit.UIView
 import platform.UIKit.UIViewController
 
@@ -181,7 +175,7 @@ fun SmbIosSampleScreen() {
 
     DisposableEffect(browserSession) {
         onDispose {
-            scope.launch(Dispatchers.IO) {
+            scope.launch(Dispatchers.IO + NonCancellable) {
                 browserSession.closeSuspend()
             }
         }
@@ -675,7 +669,7 @@ private fun IosFileViewerScreen(
     entry: SmbDirectoryEntry,
     onBack: () -> Unit,
 ) {
-    var activeType by remember(entry.name) { mutableStateOf(SmbPreviewType.fromFileName(entry.name)) }
+    var activeType by remember(shareName, filePath) { mutableStateOf(SmbPreviewType.fromFileName(entry.name)) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
@@ -709,6 +703,7 @@ private fun IosFileViewerScreen(
 
                     LaunchedEffect(shareName, filePath) {
                         loading = true
+                        error = null
                         runCatching {
                             withContext(Dispatchers.IO) { session.readTextFile(shareName, filePath) }
                         }.fold(
@@ -739,11 +734,12 @@ private fun IosFileViewerScreen(
                     var loading by remember(shareName, filePath) { mutableStateOf(true) }
                     var bitmap by remember(shareName, filePath) { mutableStateOf<ImageBitmap?>(null) }
                     var error by remember(shareName, filePath) { mutableStateOf<String?>(null) }
-                    var scale by remember { mutableFloatStateOf(1f) }
-                    var offset by remember { mutableStateOf(Offset.Zero) }
+                    var scale by remember(shareName, filePath) { mutableFloatStateOf(1f) }
+                    var offset by remember(shareName, filePath) { mutableStateOf(Offset.Zero) }
 
                     LaunchedEffect(shareName, filePath) {
                         loading = true
+                        error = null
                         runCatching {
                             withContext(Dispatchers.IO) {
                                 val bytes = session.readFileBytes(shareName, filePath)
@@ -765,7 +761,7 @@ private fun IosFileViewerScreen(
                                 .fillMaxSize()
                                 .background(Color.Black)
                                 .clipToBounds()
-                                .pointerInput(Unit) {
+                                .pointerInput(shareName, filePath) {
                                     detectTransformGestures { _, pan, zoom, _ ->
                                         scale = (scale * zoom).coerceIn(1f, 5f)
                                         offset = if (scale > 1f) offset + pan else Offset.Zero
@@ -790,49 +786,60 @@ private fun IosFileViewerScreen(
                 }
 
                 SmbPreviewType.VIDEO -> {
+                    val videoScope = rememberCoroutineScope()
                     var loading by remember(shareName, filePath) { mutableStateOf(true) }
-                    var loadedBytes by remember { mutableLongStateOf(0L) }
-                    var totalBytes by remember { mutableLongStateOf(entry.size) }
-                    var localVideoPath by remember(shareName, filePath) { mutableStateOf<String?>(null) }
+                    var httpServer by remember(shareName, filePath) { mutableStateOf<SmbHttpRangeServer?>(null) }
                     var error by remember(shareName, filePath) { mutableStateOf<String?>(null) }
-                    var playerRef by remember { mutableStateOf<AVPlayer?>(null) }
+                    var playerRef by remember(shareName, filePath) { mutableStateOf<AVPlayer?>(null) }
 
                     DisposableEffect(shareName, filePath) {
                         onDispose {
                             playerRef?.pause()
                             playerRef = null
-                            localVideoPath?.let { path ->
-                                NSFileManager.defaultManager.removeItemAtPath(path, error = null)
+                            val serverToClose = httpServer
+                            httpServer = null
+                            serverToClose?.markClosed()
+                            if (serverToClose != null) {
+                                videoScope.launch(Dispatchers.IO + NonCancellable) {
+                                    runCatching { serverToClose.closeSuspend() }
+                                }
                             }
                         }
                     }
 
                     LaunchedEffect(shareName, filePath) {
                         loading = true
+                        error = null
+                        var openedStream: SmbRandomAccessStream? = null
+                        var openedServer: SmbHttpRangeServer? = null
                         runCatching {
                             withContext(Dispatchers.IO) {
-                                val bytes = session.readFileBytes(
+                                val stream = session.openRandomAccessStream(
                                     shareName = shareName,
                                     filePath = filePath,
-                                    onProgress = { loaded, total ->
-                                        loadedBytes = loaded
-                                        totalBytes = total
-                                    },
+                                    cacheWindowBytes = 256 * 1024,
                                 )
-                                val ext = entry.name.substringAfterLast('.', "mp4")
-                                val tempPath = "${NSTemporaryDirectory()}smb_ios_video_${entry.fileId}.$ext"
-                                bytes.usePinned { pinned ->
-                                    val nsData = NSData.create(
-                                        bytes = pinned.addressOf(0),
-                                        length = bytes.size.toULong(),
-                                    )
-                                    nsData.writeToFile(tempPath, atomically = true)
-                                }
-                                tempPath
+                                openedStream = stream
+                                val server = SmbHttpRangeServer.start(
+                                    stream = stream,
+                                    fileName = entry.name,
+                                )
+                                openedServer = server
+                                server
                             }
                         }.fold(
-                            onSuccess = { localVideoPath = it },
-                            onFailure = { error = it.message },
+                            onSuccess = { server ->
+                                httpServer = server
+                            },
+                            onFailure = { e ->
+                                openedStream?.markClosed()
+                                openedServer?.markClosed()
+                                withContext(Dispatchers.IO + NonCancellable) {
+                                    runCatching { openedServer?.closeSuspend() }
+                                    runCatching { openedStream?.closeSuspend() }
+                                }
+                                error = e.message ?: e::class.simpleName ?: "動画ストリームを開けませんでした"
+                            },
                         )
                         loading = false
                     }
@@ -840,35 +847,38 @@ private fun IosFileViewerScreen(
                     when {
                         loading -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                CircularProgressIndicator()
                                 Spacer(Modifier.height(8.dp))
-                                Text("${SmbFormatUtils.formatBytes(loadedBytes)} / ${SmbFormatUtils.formatBytes(totalBytes)}")
+                                Text("SMB ストリーミング接続を開始中...")
                             }
                         }
                         error != null -> Text("エラー: $error", modifier = Modifier.padding(16.dp))
-                        localVideoPath != null -> Column(modifier = Modifier.fillMaxSize()) {
-                            UIKitView(
-                                factory = {
-                                    val view = UIView()
-                                    val url = NSURL.fileURLWithPath(localVideoPath!!)
-                                    val player = AVPlayer.playerWithURL(url)
-                                    playerRef = player
-                                    val layer = AVPlayerLayer.playerLayerWithPlayer(player)
-                                    view.layer.addSublayer(layer)
-                                    player.play()
-                                    view
-                                },
-                                update = { view ->
-                                    (view.layer.sublayers?.firstOrNull() as? AVPlayerLayer)?.frame = view.bounds
-                                },
-                                modifier = Modifier.fillMaxWidth().weight(1f),
-                            )
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                            ) {
-                                Button(onClick = { playerRef?.play() }) { Text("再生") }
-                                OutlinedButton(onClick = { playerRef?.pause() }) { Text("一時停止") }
+                        httpServer != null -> {
+                            val server = httpServer!!
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                UIKitView(
+                                    factory = {
+                                        val view = UIView()
+                                        val url = NSURL.URLWithString(server.streamUrl)!!
+                                        val player = AVPlayer.playerWithURL(url)
+                                        playerRef = player
+                                        val layer = AVPlayerLayer.playerLayerWithPlayer(player)
+                                        view.layer.addSublayer(layer)
+                                        player.play()
+                                        view
+                                    },
+                                    update = { view ->
+                                        (view.layer.sublayers?.firstOrNull() as? AVPlayerLayer)?.frame = view.bounds
+                                    },
+                                    modifier = Modifier.fillMaxWidth().weight(1f),
+                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                ) {
+                                    Button(onClick = { playerRef?.play() }) { Text("再生") }
+                                    OutlinedButton(onClick = { playerRef?.pause() }) { Text("一時停止") }
+                                }
                             }
                         }
                     }

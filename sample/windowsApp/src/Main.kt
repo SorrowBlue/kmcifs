@@ -34,6 +34,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -568,7 +569,7 @@ private object WindowsSmbGuiApp {
 
         scope.launch {
             val result = runCatching {
-                session.connect(cfg)
+                session.ensureConnected(cfg)
                 session.listDirectory(shareName, path)
             }
             postToUi {
@@ -678,7 +679,12 @@ private object WindowsSmbGuiApp {
                     filePath = filePath,
                     cacheWindowBytes = 256 * 1024,
                 )
-                SmbHttpRangeServer.start(stream = stream, fileName = entry.name)
+                try {
+                    SmbHttpRangeServer.start(stream = stream, fileName = entry.name)
+                } catch (e: Throwable) {
+                    runCatching { stream.closeSuspend() }
+                    throw e
+                }
             }
 
             postToUi {
@@ -751,7 +757,9 @@ private object WindowsSmbGuiApp {
     }
 
     fun onDestroy() {
+        mainHwnd = null
         streamMonitorJob?.cancel()
+        scope.cancel()
         runBlocking {
             runCatching { activeHttpServer?.closeSuspend() }
             runCatching { session.closeSuspend() }

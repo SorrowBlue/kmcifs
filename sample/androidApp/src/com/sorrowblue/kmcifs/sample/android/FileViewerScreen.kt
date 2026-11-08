@@ -4,12 +4,6 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import java.io.BufferedOutputStream
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.Socket
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -65,6 +59,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.sorrowblue.kmcifs.client.protocol.SmbDirectoryEntry
 import com.sorrowblue.kmcifs.sample.SmbBrowserSession
 import com.sorrowblue.kmcifs.sample.SmbFormatUtils
+import com.sorrowblue.kmcifs.sample.SmbHttpRangeServer
 import com.sorrowblue.kmcifs.sample.SmbPreviewType
 import com.sorrowblue.kmcifs.sample.SmbRandomAccessStream
 import com.sorrowblue.kmcifs.sample.SmbTextFileContent
@@ -73,7 +68,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
@@ -91,8 +85,8 @@ fun FileViewerScreen(
     entry: SmbDirectoryEntry,
     onBack: () -> Unit,
 ) {
-    val initialType = remember(entry.name) { SmbPreviewType.fromFileName(entry.name) }
-    var activeType by remember(entry.name) { mutableStateOf(initialType) }
+    val initialType = remember(shareName, filePath) { SmbPreviewType.fromFileName(entry.name) }
+    var activeType by remember(shareName, filePath) { mutableStateOf(initialType) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Surface(
@@ -385,7 +379,7 @@ private fun ImageFilePreviewContent(
 }
 
 /**
- * LibVLC ([LibVLC] / [MediaPlayer]) とローカルループバック HTTP Range ストリームサーバー ([SmbLocalHttpStreamServer])、
+ * LibVLC ([LibVLC] / [MediaPlayer]) とローカルループバック HTTP Range ストリームサーバー ([SmbHttpRangeServer])、
  * および [SmbRandomAccessStream] のマルチブロックキャッシュ＋非同期先読みを組み合わせ、
  * OpenDML 大容量 `.avi`（9.6GB 等）や DTS / AC-3 音声を含む動画ファイルを即座に SMB ストリーミング再生するコンポーネント。
  *
@@ -406,7 +400,7 @@ private fun VideoFilePreviewContent(
     var errorMessage by remember(shareName, filePath) { mutableStateOf<String?>(null) }
 
     var activeStream by remember(shareName, filePath) { mutableStateOf<SmbRandomAccessStream?>(null) }
-    var httpServerRef by remember(shareName, filePath) { mutableStateOf<SmbLocalHttpStreamServer?>(null) }
+    var httpServerRef by remember(shareName, filePath) { mutableStateOf<SmbHttpRangeServer?>(null) }
     var libVlcRef by remember(shareName, filePath) { mutableStateOf<LibVLC?>(null) }
     var vlcPlayerRef by remember(shareName, filePath) { mutableStateOf<MediaPlayer?>(null) }
 
@@ -432,7 +426,7 @@ private fun VideoFilePreviewContent(
             libVlcRef = null
 
             streamToClose?.markClosed()
-            serverToClose?.close()
+            serverToClose?.markClosed()
 
             scope.launch(Dispatchers.IO + NonCancellable) {
                 runCatching {
@@ -441,7 +435,8 @@ private fun VideoFilePreviewContent(
                     playerToRelease?.release()
                 }
                 runCatching { vlcToRelease?.release() }
-                streamToClose?.closeSuspend()
+                runCatching { serverToClose?.closeSuspend() }
+                runCatching { streamToClose?.closeSuspend() }
             }
         }
     }
@@ -449,6 +444,11 @@ private fun VideoFilePreviewContent(
     LaunchedEffect(shareName, filePath) {
         openingHandle = true
         errorMessage = null
+        var openedStream: SmbRandomAccessStream? = null
+        var openedServer: SmbHttpRangeServer? = null
+        var openedVlc: LibVLC? = null
+        var openedPlayer: MediaPlayer? = null
+
         val result = runCatching {
             withContext(Dispatchers.IO) {
                 val stream = session.openRandomAccessStream(
@@ -456,11 +456,13 @@ private fun VideoFilePreviewContent(
                     filePath = filePath,
                     cacheWindowBytes = 256 * 1024,
                 )
+                openedStream = stream
 
-                val httpServer = SmbLocalHttpStreamServer(
+                val httpServer = SmbHttpRangeServer.start(
                     stream = stream,
                     fileName = entry.name,
-                ).apply { start() }
+                )
+                openedServer = httpServer
 
                 val libVlc = LibVLC(
                     context.applicationContext,
@@ -470,7 +472,10 @@ private fun VideoFilePreviewContent(
                         "--avi-index=2",
                     ),
                 )
+                openedVlc = libVlc
+
                 val mediaPlayer = MediaPlayer(libVlc)
+                openedPlayer = mediaPlayer
                 mediaPlayer.setEventListener { event ->
                     when (event.type) {
                         MediaPlayer.Event.Playing -> isPlaying = true
@@ -519,6 +524,14 @@ private fun VideoFilePreviewContent(
                 vlcPlayerRef = bundle.mediaPlayer
             },
             onFailure = { e ->
+                openedStream?.markClosed()
+                openedServer?.markClosed()
+                withContext(Dispatchers.IO + NonCancellable) {
+                    runCatching { openedPlayer?.release() }
+                    runCatching { openedVlc?.release() }
+                    runCatching { openedServer?.closeSuspend() }
+                    runCatching { openedStream?.closeSuspend() }
+                }
                 errorMessage = e.message ?: e::class.simpleName ?: "動画ストリームを開けませんでした"
             },
         )
@@ -677,171 +690,10 @@ private fun VideoFilePreviewContent(
 
 private class VlcSessionBundle(
     val stream: SmbRandomAccessStream,
-    val httpServer: SmbLocalHttpStreamServer,
+    val httpServer: SmbHttpRangeServer,
     val libVlc: LibVLC,
     val mediaPlayer: MediaPlayer,
 )
-
-/**
- * `127.0.0.1` 上で動作する軽量な HTTP 1.1 Range 対応ストリーミングサーバー。
- *
- * LibVLC に `http://127.0.0.1:<port>/<fileName>` を渡すことで：
- * 1. `STREAM_CAN_SEEK = true`（HTTP `Range: bytes=...` による 64bit シーク対応）
- * 2. `STREAM_CAN_FASTSEEK = false`（ネットワークストリームとして扱わせ、9.6GB の AVI ファイルを開いた際に
- *    数十MBのインデックスチャンク群を再生前に全スキャンするのを防ぎ、先頭チャンクから即座に再生を開始させる）
- * を両立する。
- */
-private class SmbLocalHttpStreamServer(
-    private val stream: SmbRandomAccessStream,
-    fileName: String,
-) : AutoCloseable {
-
-    private val serverSocket = ServerSocket(0, 16, InetAddress.getLoopbackAddress())
-    private val encodedName = Uri.encode(fileName.ifEmpty { "video.mp4" })
-    private val mimeType = guessMimeType(fileName)
-
-    val streamUrl: String = "http://127.0.0.1:${serverSocket.localPort}/$encodedName"
-
-    @kotlin.concurrent.Volatile
-    private var closed = false
-
-    fun start() {
-        Thread({
-            while (!closed) {
-                val client = try {
-                    serverSocket.accept()
-                } catch (e: Throwable) {
-                    break
-                }
-                Thread({ handleClient(client) }, "SmbHttpWorker").apply {
-                    isDaemon = true
-                    start()
-                }
-            }
-        }, "SmbHttpAccept").apply {
-            isDaemon = true
-            start()
-        }
-    }
-
-    private fun handleClient(socket: Socket) {
-        socket.use { sock ->
-            runCatching {
-                sock.tcpNoDelay = true
-                val reader = BufferedReader(InputStreamReader(sock.getInputStream(), Charsets.US_ASCII))
-                val requestLine = reader.readLine() ?: return
-                val isHead = requestLine.startsWith("HEAD ", ignoreCase = true)
-
-                var rangeHeader: String? = null
-                while (true) {
-                    val line = reader.readLine() ?: break
-                    if (line.isEmpty()) break
-                    if (line.startsWith("Range:", ignoreCase = true)) {
-                        rangeHeader = line.substringAfter(':').trim()
-                    }
-                }
-
-                val totalSize = stream.size
-                var startOffset = 0L
-                var endOffset = if (totalSize > 0L) totalSize - 1L else Long.MAX_VALUE
-                var isPartial = false
-
-                if (rangeHeader != null && rangeHeader.startsWith("bytes=", ignoreCase = true)) {
-                    val spec = rangeHeader.substringAfter('=').substringBefore(',').trim()
-                    val dashIdx = spec.indexOf('-')
-                    if (dashIdx >= 0) {
-                        val startPart = spec.substring(0, dashIdx).trim()
-                        val endPart = spec.substring(dashIdx + 1).trim()
-                        if (startPart.isNotEmpty()) {
-                            startOffset = startPart.toLongOrNull() ?: 0L
-                            if (endPart.isNotEmpty()) {
-                                endOffset = endPart.toLongOrNull() ?: endOffset
-                            }
-                            isPartial = true
-                        } else if (endPart.isNotEmpty() && totalSize > 0L) {
-                            val suffixLen = endPart.toLongOrNull() ?: 0L
-                            startOffset = (totalSize - suffixLen).coerceAtLeast(0L)
-                            endOffset = totalSize - 1L
-                            isPartial = true
-                        }
-                    }
-                }
-
-                if (totalSize > 0L) {
-                    if (startOffset >= totalSize) {
-                        val out = sock.getOutputStream()
-                        val err = "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */$totalSize\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                        out.write(err.encodeToByteArray())
-                        out.flush()
-                        return
-                    }
-                    endOffset = endOffset.coerceAtMost(totalSize - 1L)
-                }
-
-                val contentLength = if (totalSize > 0L) (endOffset - startOffset + 1L) else -1L
-                val statusLine = if (isPartial) "HTTP/1.1 206 Partial Content" else "HTTP/1.1 200 OK"
-                val headers = buildString {
-                    append(statusLine).append("\r\n")
-                    append("Content-Type: ").append(mimeType).append("\r\n")
-                    append("Accept-Ranges: bytes\r\n")
-                    if (isPartial && totalSize > 0L) {
-                        append("Content-Range: bytes ").append(startOffset).append('-').append(endOffset).append('/').append(totalSize).append("\r\n")
-                    }
-                    if (contentLength >= 0L) {
-                        append("Content-Length: ").append(contentLength).append("\r\n")
-                    }
-                    append("Connection: close\r\n\r\n")
-                }
-
-                val output = BufferedOutputStream(sock.getOutputStream(), 65536)
-                output.write(headers.encodeToByteArray())
-                output.flush()
-
-                if (isHead) return
-
-                val buffer = ByteArray(65536)
-                var currentPos = startOffset
-                while (!closed && !stream.isClosed && (totalSize <= 0L || currentPos <= endOffset)) {
-                    val toRead = if (totalSize > 0L) {
-                        minOf(buffer.size.toLong(), endOffset - currentPos + 1L).toInt()
-                    } else {
-                        buffer.size
-                    }
-                    if (toRead <= 0) break
-
-                    val readBytes = runBlocking(Dispatchers.IO) {
-                        stream.readAt(currentPos, buffer, 0, toRead)
-                    }
-                    if (readBytes <= 0) break
-
-                    output.write(buffer, 0, readBytes)
-                    currentPos += readBytes
-                }
-                output.flush()
-            }
-        }
-    }
-
-    override fun close() {
-        closed = true
-        runCatching { serverSocket.close() }
-    }
-
-    companion object {
-        private fun guessMimeType(fileName: String): String {
-            val ext = fileName.substringAfterLast('.', "").lowercase()
-            return when (ext) {
-                "avi" -> "video/x-msvideo"
-                "mp4", "m4v" -> "video/mp4"
-                "mkv" -> "video/x-matroska"
-                "webm" -> "video/webm"
-                "mov" -> "video/quicktime"
-                "ts" -> "video/mp2t"
-                else -> "application/octet-stream"
-            }
-        }
-    }
-}
 
 @Composable
 private fun UnsupportedFileTypePrompt(

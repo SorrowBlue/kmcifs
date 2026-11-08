@@ -52,6 +52,7 @@ class SmbSampleTest {
         assertEquals(SmbPreviewType.TEXT, SmbPreviewType.fromFileName("notes.txt"))
         assertEquals(SmbPreviewType.TEXT, SmbPreviewType.fromFileName("README.md"))
         assertEquals(SmbPreviewType.TEXT, SmbPreviewType.fromFileName("config.json"))
+        assertEquals(SmbPreviewType.TEXT, SmbPreviewType.fromFileName("subtitles.srt"))
         assertEquals(SmbPreviewType.TEXT, SmbPreviewType.fromFileName("README"))
 
         assertEquals(SmbPreviewType.IMAGE, SmbPreviewType.fromFileName("photo.JPG"))

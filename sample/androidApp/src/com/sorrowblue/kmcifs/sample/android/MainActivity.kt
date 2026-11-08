@@ -65,6 +65,7 @@ import com.sorrowblue.kmcifs.sample.SmbFormatUtils
 import com.sorrowblue.kmcifs.sample.SmbPreviewType
 import com.sorrowblue.kmcifs.sample.SmbSavedConnection
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -137,7 +138,7 @@ fun SmbAndroidSampleApp() {
 
     DisposableEffect(browserSession) {
         onDispose {
-            scope.launch(Dispatchers.IO) {
+            scope.launch(Dispatchers.IO + NonCancellable) {
                 browserSession.closeSuspend()
             }
         }
