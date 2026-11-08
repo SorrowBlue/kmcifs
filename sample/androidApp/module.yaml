@@ -5,8 +5,8 @@ dependencies:
   - $compose.runtime
   - $compose.foundation
   - $compose.material3
-  - androidx.activity:activity-compose:1.10.1
-  - org.videolan.android:libvlc-all:3.6.0
+  - $libs.androidx.activity.compose
+  - $libs.libvlc.all
 
 settings:
   compose:

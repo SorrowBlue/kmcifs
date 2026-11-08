@@ -11,6 +11,7 @@ on:
       - "kotlin"
       - "kotlin.bat"
       - "project.yaml"
+      - "libs.versions.toml"
       - "kmcifs-client/module.yaml"
       - ".github/actions/setup-kotlin/**"
       - ".github/workflows/docs.yml"
@@ -25,6 +26,7 @@ on:
       - "kotlin"
       - "kotlin.bat"
       - "project.yaml"
+      - "libs.versions.toml"
       - "kmcifs-client/module.yaml"
       - ".github/actions/setup-kotlin/**"
       - ".github/workflows/docs.yml"
@@ -70,6 +72,7 @@ jobs:
               - 'kotlin'
               - 'kotlin.bat'
               - 'project.yaml'
+              - 'libs.versions.toml'
               - 'kmcifs-client/module.yaml'
               - '.github/actions/setup-kotlin/**'
               - '.github/workflows/docs.yml'

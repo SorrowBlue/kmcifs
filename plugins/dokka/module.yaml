@@ -3,6 +3,6 @@ product: jvm/amper-plugin
 description: Generates Dokka HTML API documentation
 
 dependencies:
-  - org.jetbrains.dokka:dokka-core:2.0.0
-  - org.jetbrains.dokka:dokka-base:2.0.0
-  - org.jetbrains.dokka:analysis-kotlin-descriptors:2.0.0
+  - $libs.dokka.core
+  - $libs.dokka.base
+  - $libs.dokka.analysis.kotlin.descriptors
