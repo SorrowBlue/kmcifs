@@ -79,14 +79,14 @@ runs:
 
     - name: Cache Kotlin Toolchain CLI
       if: inputs.cache == 'true'
-      uses: actions/cache@v4.3.0
+      uses: actions/cache@v6.1.0
       with:
         path: ${{ steps.meta.outputs.cli_cache_path }}
         key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin', 'kotlin.bat') }}
 
     - name: Cache Kotlin dependencies
       if: inputs.cache == 'true'
-      uses: actions/cache@v4.3.0
+      uses: actions/cache@v6.1.0
       with:
         path: ${{ steps.meta.outputs.deps_cache_path }}
         key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', 'libs.versions.toml', '**/module.yaml') }}

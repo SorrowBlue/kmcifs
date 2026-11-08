@@ -54,12 +54,12 @@ jobs:
     steps:
       - name: Checkout repository
         if: github.event_name == 'push' || github.event_name == 'pull_request'
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7.0.1
 
       - name: Filter changed paths
         if: github.event_name == 'push' || github.event_name == 'pull_request'
         id: filter
-        uses: dorny/paths-filter@v3.0.4
+        uses: dorny/paths-filter@v4.0.3
         with:
           filters: |
             zensical:
@@ -98,10 +98,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7.0.1
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5.4.2
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
 
@@ -110,7 +110,7 @@ jobs:
 
       - name: Upload Zensical artifact
         if: needs.changes.outputs.deploy == 'true'
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: zensical-site
           path: build/site
@@ -123,7 +123,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7.0.1
 
       - name: Set up Kotlin Toolchain
         uses: $/.github/actions/setup-kotlin
@@ -133,7 +133,7 @@ jobs:
 
       - name: Upload Dokka artifact
         if: needs.changes.outputs.deploy == 'true'
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: dokka-api
           path: build/dokka/html/kmcifs-client
@@ -156,25 +156,25 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5.0.0
+        uses: actions/configure-pages@v6.0.0
 
       - name: Download Zensical site artifact
-        uses: actions/download-artifact@v4.3.0
+        uses: actions/download-artifact@v8.0.2
         with:
           name: zensical-site
           path: build/site
 
       - name: Download Dokka API artifact
-        uses: actions/download-artifact@v4.3.0
+        uses: actions/download-artifact@v8.0.2
         with:
           name: dokka-api
           path: build/site/api
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3.0.1
+        uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: build/site
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4.0.5
+        uses: actions/deploy-pages@v5.0.1
