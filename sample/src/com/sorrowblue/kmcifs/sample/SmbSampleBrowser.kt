@@ -20,7 +20,7 @@ import io.ktor.network.sockets.Socket
 import io.ktor.network.sockets.aSocket
 import io.ktor.network.sockets.openReadChannel
 import io.ktor.network.sockets.openWriteChannel
-import io.ktor.utils.io.readUTF8Line
+import io.ktor.utils.io.readLine
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,7 +50,7 @@ enum class SmbPreviewType(val label: String) {
             "html", "htm", "css", "js", "mjs", "ts", "tsx", "jsx",
             "kt", "kts", "java", "py", "rb", "go", "rs", "c", "cpp", "h", "hpp",
             "cs", "swift", "sh", "bash", "zsh", "bat", "cmd", "ps1", "sql",
-            "gradle", "gitignore", "gitattributes", "env", " srt", "vtt",
+            "gradle", "gitignore", "gitattributes", "env", "srt", "vtt",
         )
 
         private val TEXT_FILENAMES = setOf(
@@ -223,6 +223,33 @@ class SmbBrowserSession {
     }
 
     /**
+     * 既に同一の接続先・認証情報・暗号化ポリシーで接続中であれば既存セッションを維持し、
+     * 未接続または接続設定が異なる場合のみ再接続を行う。
+     */
+    suspend fun ensureConnected(config: SmbSavedConnection): SmbConnectionSummary = mutex.withLock {
+        val currentClient = activeClient
+        val currentConfig = activeConfig
+        if (currentClient != null && !currentClient.isClosed && currentConfig != null && isSameSessionConfig(currentConfig, config)) {
+            activeConfig = config
+            return currentClient.toSummary()
+        }
+        closeInternal()
+        val client = openClient(config)
+        activeConfig = config
+        activeClient = client
+        return client.toSummary()
+    }
+
+    private fun isSameSessionConfig(a: SmbSavedConnection, b: SmbSavedConnection): Boolean {
+        return a.host.trim() == b.host.trim() &&
+            a.port == b.port &&
+            a.username == b.username &&
+            a.password == b.password &&
+            a.domain == b.domain &&
+            a.encryptionPolicy == b.encryptionPolicy
+    }
+
+    /**
      * 接続中のサーバーから共有フォルダ一覧を取得する。
      */
     suspend fun listShares(includeHidden: Boolean = false): List<SmbShareInfo> = mutex.withLock {
@@ -330,17 +357,16 @@ class SmbBrowserSession {
 
             val total = fileSize.toInt()
             val buffer = ByteArray(total)
-            val chunkSize = 65536
+            val chunkSize = 262144
             var offset = 0
             onProgress?.invoke(0L, fileSize)
             while (offset < total) {
                 val readLen = minOf(chunkSize, total - offset)
-                val chunk = file.read(offset.toLong(), readLen)
-                if (chunk.isEmpty()) break
-                chunk.copyInto(buffer, offset)
-                offset += chunk.size
+                val readCount = file.readInto(offset.toLong(), buffer, offset, readLen)
+                if (readCount <= 0) break
+                offset += readCount
                 onProgress?.invoke(offset.toLong(), fileSize)
-                if (chunk.size < readLen) break
+                if (readCount < readLen) break
             }
             return if (offset == total) buffer else buffer.copyOf(offset)
         } finally {
@@ -365,7 +391,7 @@ class SmbBrowserSession {
         val file = openFileWithRetryLocked(cleanShare, normalizedPath)
         try {
             val totalSize = file.size
-            val chunkSize = 65536
+            val chunkSize = 262144
             var offset = 0L
             onProgress?.invoke(0L, totalSize)
 
@@ -473,7 +499,7 @@ class SmbBrowserSession {
     private suspend fun ensureShareLocked(shareName: String): SmbShare {
         val client = ensureClientLocked()
         val existing = activeShare
-        if (existing != null && activeShareName.equals(shareName, ignoreCase = true)) {
+        if (existing != null && !existing.isClosed && activeShareName.equals(shareName, ignoreCase = true)) {
             return existing
         }
         if (existing != null) {
@@ -504,8 +530,6 @@ class SmbBrowserSession {
         val smbConfig = SmbConfig(
             encryptionPolicy = config.encryptionPolicy,
             preferEncryption = config.encryptionPolicy == SmbEncryptionPolicy.REQUIRED,
-            alwaysSign = true,
-            verifyServerSignatures = false,
         )
         return SmbClient.connect(
             host = config.host.trim(),
@@ -547,6 +571,9 @@ class SmbRandomAccessStream internal constructor(
 
     @kotlin.concurrent.Volatile
     private var closed: Boolean = false
+
+    @kotlin.concurrent.Volatile
+    private var fileClosed: Boolean = false
 
     val isClosed: Boolean
         get() = closed
@@ -683,7 +710,9 @@ class SmbRandomAccessStream internal constructor(
         } catch (e: Throwable) {
             val reopen = reopenFileLocked ?: throw e
             if (closed) throw e
+            val oldFile = smbFile
             smbFile = reopen()
+            runCatching { oldFile.closeSuspend() }
             smbFile.read(offset = blockStartOffset, length = fetchLen)
         }
         if (fetched.isNotEmpty()) {
@@ -748,7 +777,10 @@ class SmbRandomAccessStream internal constructor(
                 cacheMutex.withLock {
                     blockCache.clear()
                 }
-                runCatching { smbFile.closeSuspend() }
+                if (!fileClosed) {
+                    fileClosed = true
+                    runCatching { smbFile.closeSuspend() }
+                }
             }
         }
     }
@@ -774,6 +806,9 @@ class SmbHttpRangeServer private constructor(
     @kotlin.concurrent.Volatile
     private var closed = false
 
+    @kotlin.concurrent.Volatile
+    private var selectorClosed = false
+
     private fun startAcceptLoop() {
         scope.launch {
             while (!closed) {
@@ -794,12 +829,12 @@ class SmbHttpRangeServer private constructor(
             val readChannel = socket.openReadChannel()
             val writeChannel = socket.openWriteChannel(autoFlush = false)
 
-            val requestLine = readChannel.readUTF8Line() ?: return
+            val requestLine = readChannel.readLine() ?: return
             val isHead = requestLine.startsWith("HEAD ", ignoreCase = true)
 
             var rangeHeader: String? = null
             while (true) {
-                val line = readChannel.readUTF8Line() ?: break
+                val line = readChannel.readLine() ?: break
                 if (line.isEmpty()) break
                 if (line.startsWith("Range:", ignoreCase = true)) {
                     rangeHeader = line.substringAfter(':').trim()
@@ -833,14 +868,16 @@ class SmbHttpRangeServer private constructor(
             }
 
             if (totalSize > 0L) {
-                if (startOffset >= totalSize) {
+                endOffset = endOffset.coerceAtMost(totalSize - 1L)
+                if (startOffset < 0L || startOffset >= totalSize || endOffset < startOffset) {
                     val err = "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */$totalSize\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                     val errBytes = err.encodeToByteArray()
                     writeChannel.writeFully(errBytes, 0, errBytes.size)
                     writeChannel.flush()
                     return
                 }
-                endOffset = endOffset.coerceAtMost(totalSize - 1L)
+            } else if (startOffset < 0L || endOffset < startOffset) {
+                return
             }
 
             val contentLength = if (totalSize > 0L) (endOffset - startOffset + 1L) else -1L
@@ -888,27 +925,42 @@ class SmbHttpRangeServer private constructor(
         }
     }
 
-    suspend fun closeSuspend() {
-        if (closed) return
+    fun markClosed() {
         closed = true
+        stream.markClosed()
         scope.cancel()
         runCatching { serverSocket.close() }
-        runCatching { selectorManager.close() }
+    }
+
+    suspend fun closeSuspend() {
+        markClosed()
+        if (!selectorClosed) {
+            selectorClosed = true
+            runCatching { selectorManager.close() }
+        }
         stream.closeSuspend()
     }
 
     companion object {
         suspend fun start(stream: SmbRandomAccessStream, fileName: String): SmbHttpRangeServer {
             val selectorManager = SelectorManager(Dispatchers.IO)
-            val serverSocket = aSocket(selectorManager).tcp().bind("127.0.0.1", 0)
-            val boundPort = (serverSocket.localAddress as? InetSocketAddress)?.port ?: 0
-            return SmbHttpRangeServer(
-                selectorManager = selectorManager,
-                serverSocket = serverSocket,
-                stream = stream,
-                fileName = fileName,
-                port = boundPort,
-            ).also { it.startAcceptLoop() }
+            var serverSocket: ServerSocket? = null
+            return try {
+                val boundSocket = aSocket(selectorManager).tcp().bind("127.0.0.1", 0)
+                serverSocket = boundSocket
+                val boundPort = (boundSocket.localAddress as? InetSocketAddress)?.port ?: 0
+                SmbHttpRangeServer(
+                    selectorManager = selectorManager,
+                    serverSocket = boundSocket,
+                    stream = stream,
+                    fileName = fileName,
+                    port = boundPort,
+                ).also { it.startAcceptLoop() }
+            } catch (e: Throwable) {
+                runCatching { serverSocket?.close() }
+                runCatching { selectorManager.close() }
+                throw e
+            }
         }
 
         private fun encodeUrlPathSegment(name: String): String {

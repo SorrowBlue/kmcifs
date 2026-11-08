@@ -147,16 +147,18 @@ internal object DceRpcSrvSvc {
         if (entriesRead <= 0 || bufferPtr == 0u) return emptyList()
 
         // Conformant array MaxCount
-        if (pos + 4 > stubData.size) return emptyList()
+        if (pos > stubData.size - 4) return emptyList()
         val maxCount = stubData.readUIntLE(pos).toInt(); pos += 4
-        val count = minOf(entriesRead, maxCount)
+        if (maxCount <= 0) return emptyList()
+        val maxPossibleEntries = (stubData.size - pos) / 12
+        val count = minOf(entriesRead, maxCount, maxPossibleEntries)
 
         // Each SHARE_INFO_1 fixed header in NDR is 12 bytes:
         // shi1_netname (ptr 4B), shi1_type (uint32 4B), shi1_remark (ptr 4B)
         data class RawEntry(val namePtr: UInt, val type: UInt, val remarkPtr: UInt)
         val rawEntries = ArrayList<RawEntry>(count)
         for (i in 0 until count) {
-            if (pos + 12 > stubData.size) break
+            if (pos > stubData.size - 12) break
             val namePtr = stubData.readUIntLE(pos)
             val shareType = stubData.readUIntLE(pos + 4)
             val remarkPtr = stubData.readUIntLE(pos + 8)
@@ -167,12 +169,12 @@ internal object DceRpcSrvSvc {
         fun readNdrString(): String {
             // Align to 4 bytes
             pos = (pos + 3) and 3.inv()
-            if (pos + 12 > stubData.size) return ""
+            if (pos > stubData.size - 12) return ""
             // maxCount, offset, actualCount
             val actualCount = stubData.readUIntLE(pos + 8).toInt()
             pos += 12
+            if (actualCount <= 0 || actualCount > (stubData.size - pos) / 2) return ""
             val byteLen = actualCount * 2
-            if (byteLen <= 0 || pos + byteLen > stubData.size) return ""
             val str = stubData.decodeFromUtf16LE(pos, byteLen).trimEnd('\u0000')
             pos += byteLen
             pos = (pos + 3) and 3.inv()

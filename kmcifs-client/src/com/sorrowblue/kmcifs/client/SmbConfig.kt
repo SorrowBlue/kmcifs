@@ -33,6 +33,8 @@ enum class SmbEncryptionPolicy {
  * @property preferEncryption [SmbEncryptionPolicy.NEGOTIATE] 時にサーバーが暗号化をサポートしていれば自発的に暗号化を有効にするか
  * @property alwaysSign 暗号化されていないパケットに対して常に SMB 署名を付与するか
  * @property verifyServerSignatures サーバーから受信した署名付きパケットの署名を検証するか
+ * @property queryDirectoryBufferSize ディレクトリ一覧取得 (`QUERY_DIRECTORY`) の1回あたりの要求バッファサイズ（バイト）
+ * @property randomAccessBufferSize [SmbRandomAccessFile] の既定の読み取りバッファサイズ（バイト）
  * @property connectTimeoutMillis TCP ソケット接続タイムアウト（ミリ秒）
  * @property requestTimeoutMillis 各 SMB リクエストの応答待機タイムアウト（ミリ秒）
  */
@@ -49,9 +51,11 @@ data class SmbConfig(
         SmbCipherId.AES_128_CCM,
     ),
     val encryptionPolicy: SmbEncryptionPolicy = SmbEncryptionPolicy.NEGOTIATE,
-    val preferEncryption: Boolean = true,
-    val alwaysSign: Boolean = true,
+    val preferEncryption: Boolean = false,
+    val alwaysSign: Boolean = false,
     val verifyServerSignatures: Boolean = true,
+    val queryDirectoryBufferSize: Int = 64 * 1024,
+    val randomAccessBufferSize: Int = SmbRandomAccessFile.DEFAULT_BUFFER_SIZE,
     val connectTimeoutMillis: Long = 10_000L,
     val requestTimeoutMillis: Long = 30_000L,
 )

@@ -1,6 +1,11 @@
 package com.sorrowblue.kmcifs.client.crypto
 
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.encodeToUtf16LE
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -113,5 +118,30 @@ class CryptoTest {
         val (ccmCt, ccmTag) = Aes.ccmEncrypt(ccmKey, ccmNonce, aad, plaintext)
         val ccmDec = Aes.ccmDecrypt(ccmKey, ccmNonce, aad, ccmCt, ccmTag)
         assertContentEquals(plaintext, ccmDec)
+    }
+
+    @Test
+    fun testConcurrentSharedKeySafety() = runTest {
+        val sharedKey = "2b7e151628aed2a6abf7158809cf4f3c".hexToBytes()
+        val aad = ByteArray(32) { (it * 5).toByte() }
+
+        withContext(Dispatchers.Default) {
+            val jobs = (0 until 8).map { worker ->
+                async {
+                    for (iter in 0 until 50) {
+                        val iv = ByteArray(12) { idx -> ((worker * 17 + iter + idx) and 0xFF).toByte() }
+                        val payload = ByteArray(256) { idx -> ((worker + iter * 3 + idx) and 0xFF).toByte() }
+                        val (ct, tag) = Aes.gcmEncrypt(sharedKey, iv, aad, payload)
+                        val dec = Aes.gcmDecrypt(sharedKey, iv, aad, ct, tag)
+                        assertContentEquals(payload, dec)
+
+                        val mac1 = Aes.cmac(sharedKey, payload)
+                        val mac2 = Aes.cmac(sharedKey, payload)
+                        assertContentEquals(mac1, mac2)
+                    }
+                }
+            }
+            jobs.awaitAll()
+        }
     }
 }

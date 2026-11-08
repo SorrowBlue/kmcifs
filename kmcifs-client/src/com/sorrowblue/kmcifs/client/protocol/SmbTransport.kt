@@ -32,25 +32,34 @@ internal class KtorTcpSmbTransport private constructor(
     private val writeChannel: ByteWriteChannel,
 ) : SmbPacketTransport {
 
+    private val sendPrefix = ByteArray(4)
+    private val receivePrefix = ByteArray(4)
+
     override suspend fun sendPacket(packet: ByteArray) {
         val len = packet.size
-        val framed = ByteArray(4 + len)
-        framed[0] = 0x00 // Direct TCP Stream Protocol Header (0x00 + 24-bit big-endian length)
-        framed[1] = ((len ushr 16) and 0xFF).toByte()
-        framed[2] = ((len ushr 8) and 0xFF).toByte()
-        framed[3] = (len and 0xFF).toByte()
-        packet.copyInto(framed, 4)
+        sendPrefix[0] = 0x00 // Direct TCP Stream Protocol Header (0x00 + 24-bit big-endian length)
+        sendPrefix[1] = ((len ushr 16) and 0xFF).toByte()
+        sendPrefix[2] = ((len ushr 8) and 0xFF).toByte()
+        sendPrefix[3] = (len and 0xFF).toByte()
 
-        writeChannel.writeFully(framed, 0, framed.size)
+        writeChannel.writeFully(sendPrefix, 0, 4)
+        if (len > 0) {
+            writeChannel.writeFully(packet, 0, len)
+        }
         writeChannel.flush()
     }
 
     override suspend fun receivePacket(): ByteArray {
-        val prefix = ByteArray(4)
-        readChannel.readFully(prefix, 0, 4)
-        val length = ((prefix[1].toInt() and 0xFF) shl 16) or
-            ((prefix[2].toInt() and 0xFF) shl 8) or
-            (prefix[3].toInt() and 0xFF)
+        readChannel.readFully(receivePrefix, 0, 4)
+        check(receivePrefix[0].toInt() == 0) {
+            "Invalid Direct TCP stream protocol header byte: 0x${(receivePrefix[0].toInt() and 0xFF).toString(16)}"
+        }
+        val length = ((receivePrefix[1].toInt() and 0xFF) shl 16) or
+            ((receivePrefix[2].toInt() and 0xFF) shl 8) or
+            (receivePrefix[3].toInt() and 0xFF)
+        check(length >= SmbHeader.SIZE) {
+            "Direct TCP frame length ($length) is smaller than minimum SMB2 header size (${SmbHeader.SIZE})"
+        }
         val payload = ByteArray(length)
         if (length > 0) {
             readChannel.readFully(payload, 0, length)
@@ -66,16 +75,19 @@ internal class KtorTcpSmbTransport private constructor(
     companion object {
         suspend fun connect(host: String, port: Int, connectTimeoutMillis: Long): KtorTcpSmbTransport {
             val selectorManager = SelectorManager(Dispatchers.IO)
+            var socket: Socket? = null
             return try {
-                val socket = withTimeout(connectTimeoutMillis) {
+                val connected = withTimeout(connectTimeoutMillis) {
                     aSocket(selectorManager).tcp().connect(host, port) {
                         noDelay = true
                     }
                 }
-                val readChannel = socket.openReadChannel()
-                val writeChannel = socket.openWriteChannel(autoFlush = false)
-                KtorTcpSmbTransport(selectorManager, socket, readChannel, writeChannel)
+                socket = connected
+                val readChannel = connected.openReadChannel()
+                val writeChannel = connected.openWriteChannel(autoFlush = false)
+                KtorTcpSmbTransport(selectorManager, connected, readChannel, writeChannel)
             } catch (e: Throwable) {
+                runCatching { socket?.close() }
                 runCatching { selectorManager.close() }
                 throw e
             }

@@ -107,7 +107,8 @@ internal object NtlmAuthenticator {
     fun parseType2Challenge(securityBlob: ByteArray): ChallengeInfo {
         val ntlmOffset = findNtlmsspOffset(securityBlob)
             ?: throw IllegalArgumentException("NTLMSSP signature not found in challenge security blob")
-        val type2 = securityBlob.copyOfRange(ntlmOffset, securityBlob.size)
+        val type2 = extractNtlmSlice(securityBlob, ntlmOffset)
+        require(type2.size >= 32) { "Truncated NTLMSSP Type 2 challenge message: ${type2.size} bytes" }
 
         val msgType = type2.readUIntLE(8)
         require(msgType == 2u) { "Expected NTLMSSP Type 2 message, but got type $msgType" }
@@ -121,7 +122,7 @@ internal object NtlmAuthenticator {
         if (type2.size >= 48 && (flags and NTLMSSP_NEGOTIATE_TARGET_INFO) != 0u) {
             val targetInfoLen = type2.readUShortLE(40).toInt()
             val targetInfoOffset = type2.readUIntLE(44).toInt()
-            if (targetInfoLen > 0 && targetInfoOffset + targetInfoLen <= type2.size) {
+            if (targetInfoOffset >= 32 && targetInfoLen > 0 && targetInfoLen <= type2.size - targetInfoOffset) {
                 targetInfo = type2.copyOfRange(targetInfoOffset, targetInfoOffset + targetInfoLen)
                 serverTimestamp = extractTimestampFromTargetInfo(targetInfo)
             }
@@ -362,14 +363,39 @@ internal object NtlmAuthenticator {
         return null
     }
 
+    private fun extractNtlmSlice(securityBlob: ByteArray, ntlmOffset: Int): ByteArray {
+        val maxLen = securityBlob.size - ntlmOffset
+        val asn1Len = when {
+            ntlmOffset >= 4 &&
+                securityBlob[ntlmOffset - 4] == 0x04.toByte() &&
+                securityBlob[ntlmOffset - 3] == 0x82.toByte() ->
+                ((securityBlob[ntlmOffset - 2].toInt() and 0xFF) shl 8) or
+                    (securityBlob[ntlmOffset - 1].toInt() and 0xFF)
+
+            ntlmOffset >= 3 &&
+                securityBlob[ntlmOffset - 3] == 0x04.toByte() &&
+                securityBlob[ntlmOffset - 2] == 0x81.toByte() ->
+                securityBlob[ntlmOffset - 1].toInt() and 0xFF
+
+            ntlmOffset >= 2 &&
+                securityBlob[ntlmOffset - 2] == 0x04.toByte() &&
+                (securityBlob[ntlmOffset - 1].toInt() and 0xFF) < 0x80 ->
+                securityBlob[ntlmOffset - 1].toInt() and 0xFF
+
+            else -> -1
+        }
+        val sliceLen = if (asn1Len in 32..maxLen) asn1Len else maxLen
+        return securityBlob.copyOfRange(ntlmOffset, ntlmOffset + sliceLen)
+    }
+
     private fun extractTimestampFromTargetInfo(targetInfo: ByteArray): ULong? {
         var pos = 0
-        while (pos + 4 <= targetInfo.size) {
+        while (pos <= targetInfo.size - 4) {
             val avId = targetInfo.readUShortLE(pos)
             val avLen = targetInfo.readUShortLE(pos + 2).toInt()
             pos += 4
             if (avId == MSV_AV_EOL) break
-            if (pos + avLen > targetInfo.size) break
+            if (avLen < 0 || avLen > targetInfo.size - pos) break
             if (avId == MSV_AV_TIMESTAMP && avLen == 8) {
                 return targetInfo.readULongLE(pos)
             }
@@ -382,13 +408,14 @@ internal object NtlmAuthenticator {
         var pos = 0
         var flagsValueOffset = -1
         var eolOffset = -1
-        while (pos + 4 <= targetInfo.size) {
+        while (pos <= targetInfo.size - 4) {
             val avId = targetInfo.readUShortLE(pos)
             val avLen = targetInfo.readUShortLE(pos + 2).toInt()
             if (avId == MSV_AV_EOL) {
                 eolOffset = pos
                 break
             }
+            if (avLen < 0 || avLen > targetInfo.size - (pos + 4)) break
             if (avId == MSV_AV_FLAGS && avLen == 4) {
                 flagsValueOffset = pos + 4
             }

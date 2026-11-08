@@ -42,3 +42,4 @@ trigger: always_on
 - **1コミット1変更**: 論理的に独立した変更は分割する。複数の type にまたがる場合、分割を提案すること。
 - **破壊的変更**: `!` を type の後に付与する（例: `feat!:`, `fix!:`）。footer に `BREAKING CHANGE:` も記述可。
 - **出力形式**: コミットメッセージ本文のみを直接出力する。思考プロセスや解説は一切含めない。
+- **Pull Request**: PR のタイトル（Conventional Commits 形式）および本文（Description）も常に**英語**で記述すること。

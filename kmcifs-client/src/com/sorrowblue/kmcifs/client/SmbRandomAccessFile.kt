@@ -6,8 +6,7 @@ import com.sorrowblue.kmcifs.client.protocol.SmbCreateOptions
 import com.sorrowblue.kmcifs.client.protocol.SmbFileAttributes
 import com.sorrowblue.kmcifs.client.protocol.SmbFileMetadata
 import com.sorrowblue.kmcifs.client.protocol.SmbShareAccess
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.runBlocking
 
 /**
  * [SmbRandomAccessFile] のオープンモード。
@@ -60,9 +59,12 @@ class SmbEndOfFileException(
  * [read] / [readByte] による現在位置からの読み取り、[write] による現在位置への書き込み、
  * および [length] / [setLength] によるファイルサイズの参照・変更を行う。
  *
- * 小さな読み取り（[readByte] やヘッダ解析など）で毎回ネットワーク通信が発生するのを防ぐため、
- * 既定で 64KB のインメモリ読み取りバッファを備える。書き込みやサイズ変更が行われた際はバッファを即座に無効化し、
- * 読み書きの整合性を維持する。
+ * 小さな読み取り（[readByte] やヘッダ解析など）で先読みバッファリングを行いたい場合は、
+ * [bufferSize] に正のバイト数を指定することでインメモリ読み取りバッファを有効化できる（既定値は `0` でバッファリングなし）。
+ * 書き込みやサイズ変更が行われた際はバッファを即座に無効化し、読み書きの整合性を維持する。
+ *
+ * なお、Java の `RandomAccessFile` と同様に 1 つの [SmbRandomAccessFile] インスタンスは単一スレッドから順次操作する設計となっており、
+ * 別スレッドで並列に読み取る場合はスレッドごとに個別の [SmbRandomAccessFile] インスタンスを開くこと（共有元の [SmbShare] / [SmbClient] はマルチスレッド安全に共有可能）。
  */
 class SmbRandomAccessFile(
     val share: SmbShare,
@@ -98,14 +100,16 @@ class SmbRandomAccessFile(
         this.closed = false
     }
 
-    private val mutex = Mutex()
     private var smbFile: SmbFile? = null
+
+    @kotlin.concurrent.Volatile
     private var closed: Boolean = false
     private var currentPosition: Long = 0L
 
     private var bufferStartOffset: Long = -1L
     private var bufferData: ByteArray = ByteArray(0)
     private var bufferValidLength: Int = 0
+    private val scratchBuffer: ByteArray = ByteArray(8)
 
     /**
      * ファイルハンドルが現在オープンされているかどうか。
@@ -136,40 +140,12 @@ class SmbRandomAccessFile(
     /**
      * リモート SMB ファイルをオープンする。既にオープン済みの場合は何もしない。
      */
-    suspend fun open(): SmbRandomAccessFile = mutex.withLock {
+    suspend fun open(): SmbRandomAccessFile {
         check(!closed) { "SmbRandomAccessFile is already closed" }
-        if (smbFile != null) return@withLock this
-
-        val desiredAccess = if (mode.writable) {
-            SmbAccessMask.WRITE_DEFAULT
-        } else {
-            SmbAccessMask.READ_DEFAULT
-        }
-        val shareAccess = if (mode.writable) {
-            SmbShareAccess.FILE_SHARE_READ or SmbShareAccess.FILE_SHARE_WRITE
-        } else {
-            SmbShareAccess.ALL
-        }
-        val createDisposition = if (mode.writable) {
-            SmbCreateDisposition.FILE_OPEN_IF
-        } else {
-            SmbCreateDisposition.FILE_OPEN
-        }
-        var createOptions = SmbCreateOptions.FILE_NON_DIRECTORY_FILE or SmbCreateOptions.FILE_SYNCHRONOUS_IO_NONALERT
-        if (mode.writeThrough) {
-            createOptions = createOptions or SmbCreateOptions.FILE_WRITE_THROUGH
-        }
-
-        smbFile = share.openFile(
-            path = path,
-            desiredAccess = desiredAccess,
-            shareAccess = shareAccess,
-            createDisposition = createDisposition,
-            fileAttributes = SmbFileAttributes.NORMAL,
-            createOptions = createOptions,
-        )
+        if (smbFile != null) return this
+        ensureOpenLocked()
         invalidateBuffer()
-        this
+        return this
     }
 
     /**
@@ -201,33 +177,57 @@ class SmbRandomAccessFile(
      * 現在位置から 1 バイトを読み取り、`0..255` の整数として返す。
      * ファイル末尾に達している場合は `-1` を返す。
      */
-    suspend fun read(): Int = mutex.withLock {
-        val file = ensureOpenLocked()
-        if (currentPosition >= file.size) return@withLock -1
-
-        if (bufferSize > 0) {
-            if (!isOffsetInBuffer(currentPosition)) {
-                fillBufferLocked(file, currentPosition)
-            }
-            if (isOffsetInBuffer(currentPosition)) {
-                val idx = (currentPosition - bufferStartOffset).toInt()
-                val value = bufferData[idx].toInt() and 0xFF
-                currentPosition += 1L
-                return@withLock value
+    fun read(): Int {
+        check(!closed) { "SmbRandomAccessFile is closed" }
+        val fastFile = smbFile
+        val pos = currentPosition
+        if (fastFile != null) {
+            if (pos >= fastFile.size) return -1
+            if (bufferSize > 0) {
+                val bufStart = bufferStartOffset
+                val bufLen = bufferValidLength
+                val buf = bufferData
+                val rel = pos - bufStart
+                if (bufStart >= 0L && rel >= 0L && rel < bufLen && rel < buf.size) {
+                    val value = buf[rel.toInt()].toInt() and 0xFF
+                    currentPosition = pos + 1L
+                    return value
+                }
             }
         }
 
-        val one = file.read(currentPosition, 1)
-        if (one.isEmpty()) return@withLock -1
-        currentPosition += 1L
-        one[0].toInt() and 0xFF
+        return runBlocking {
+            val file = ensureOpenLocked()
+            val curPos = currentPosition
+            if (curPos >= file.size) return@runBlocking -1
+
+            if (bufferSize > 0) {
+                if (!isOffsetInBuffer(curPos)) {
+                    fillBufferLocked(file, curPos)
+                }
+                val bufStart = bufferStartOffset
+                val bufLen = bufferValidLength
+                val buf = bufferData
+                val rel = curPos - bufStart
+                if (bufStart >= 0L && rel >= 0L && rel < bufLen && rel < buf.size) {
+                    val value = buf[rel.toInt()].toInt() and 0xFF
+                    currentPosition = curPos + 1L
+                    return@runBlocking value
+                }
+            }
+
+            val n = file.readInto(curPos, scratchBuffer, 0, 1)
+            if (n <= 0) return@runBlocking -1
+            currentPosition = curPos + 1L
+            scratchBuffer[0].toInt() and 0xFF
+        }
     }
 
     /**
      * 現在位置から符号付き 1 バイト（[Byte]）を読み取り、ファイルポインタを 1 進める。
      * ファイル末尾に達している場合は [SmbEndOfFileException] を送出する。
      */
-    suspend fun readByte(): Byte {
+    fun readByte(): Byte {
         val b = read()
         if (b < 0) throw SmbEndOfFileException("EOF reached at offset $currentPosition while reading byte")
         return b.toByte()
@@ -237,7 +237,7 @@ class SmbRandomAccessFile(
      * 現在位置から符号なし 1 バイト（`0..255`）を読み取り、ファイルポインタを 1 進める。
      * ファイル末尾に達している場合は [SmbEndOfFileException] を送出する。
      */
-    suspend fun readUnsignedByte(): Int {
+    fun readUnsignedByte(): Int {
         val b = read()
         if (b < 0) throw SmbEndOfFileException("EOF reached at offset $currentPosition while reading unsigned byte")
         return b
@@ -247,80 +247,113 @@ class SmbRandomAccessFile(
      * 現在位置から配列 [b] に最大 `b.size` バイトを読み込み、実際に読み取ったバイト数を返す。
      * ファイル末尾に達しているため 1 バイトも読み取れなかった場合は `-1` を返す。
      */
-    suspend fun read(b: ByteArray): Int = read(b, 0, b.size)
+    fun read(b: ByteArray): Int = read(b, 0, b.size)
 
     /**
      * 現在位置から配列 [b] の [off] 番目以降へ最大 [len] バイトを読み込み、実際に読み取ったバイト数を返す。
      * ファイル末尾に達しているため 1 バイトも読み取れなかった場合は `-1` を返す。
      */
-    suspend fun read(b: ByteArray, off: Int, len: Int): Int = mutex.withLock {
-        require(off >= 0 && len >= 0 && off + len <= b.size) {
+    fun read(b: ByteArray, off: Int, len: Int): Int {
+        require(off >= 0 && len >= 0 && len <= b.size - off) {
             "Invalid buffer bounds: off=$off, len=$len, size=${b.size}"
         }
-        val file = ensureOpenLocked()
-        if (len == 0) return@withLock 0
-        if (currentPosition >= file.size) return@withLock -1
+        check(!closed) { "SmbRandomAccessFile is closed" }
+        if (len == 0) return 0
 
-        val availableInFile = (file.size - currentPosition).coerceAtMost(len.toLong()).toInt()
-        if (availableInFile <= 0) return@withLock -1
-
-        var totalRead = 0
-        var dstOffset = off
-        var remaining = availableInFile
-
-        // 1. まず既存の内部バッファにヒットする領域があればそこからコピーする
-        if (bufferSize > 0 && isOffsetInBuffer(currentPosition)) {
-            val bufIndex = (currentPosition - bufferStartOffset).toInt()
-            val copyLen = minOf(remaining, bufferValidLength - bufIndex)
-            bufferData.copyInto(
-                destination = b,
-                destinationOffset = dstOffset,
-                startIndex = bufIndex,
-                endIndex = bufIndex + copyLen,
-            )
-            currentPosition += copyLen
-            dstOffset += copyLen
-            totalRead += copyLen
-            remaining -= copyLen
-        }
-
-        if (remaining == 0) {
-            return@withLock totalRead
-        }
-
-        // 2. 残りの要求サイズがバッファサイズ以上なら直接 SMB READ を発行する
-        if (bufferSize <= 0 || remaining >= bufferSize) {
-            val direct = file.read(currentPosition, remaining)
-            if (direct.isNotEmpty()) {
-                direct.copyInto(b, destinationOffset = dstOffset)
-                currentPosition += direct.size
-                totalRead += direct.size
+        // Fast path: バッファ内で完結する読み取りは runBlocking を介さずオンメモリコピーで即座に返す
+        val fastFile = smbFile
+        val pos = currentPosition
+        if (fastFile != null) {
+            val fileSize = fastFile.size
+            if (pos >= fileSize) return -1
+            val availableInFile = (fileSize - pos).coerceAtMost(len.toLong()).toInt()
+            if (availableInFile <= 0) return -1
+            if (bufferSize > 0) {
+                val bufStart = bufferStartOffset
+                val bufLen = bufferValidLength
+                val buf = bufferData
+                val rel = pos - bufStart
+                if (bufStart >= 0L && rel >= 0L && rel < bufLen) {
+                    val bufIndex = rel.toInt()
+                    val availableInBuf = bufLen - bufIndex
+                    if (availableInBuf >= availableInFile && bufIndex + availableInFile <= buf.size) {
+                        buf.copyInto(
+                            destination = b,
+                            destinationOffset = off,
+                            startIndex = bufIndex,
+                            endIndex = bufIndex + availableInFile,
+                        )
+                        currentPosition = pos + availableInFile
+                        return availableInFile
+                    }
+                }
             }
-            return@withLock if (totalRead == 0) -1 else totalRead
         }
 
-        // 3. 小さな読み取りはバッファを補充してからコピーする
-        fillBufferLocked(file, currentPosition)
-        if (isOffsetInBuffer(currentPosition)) {
-            val bufIndex = (currentPosition - bufferStartOffset).toInt()
-            val copyLen = minOf(remaining, bufferValidLength - bufIndex)
-            bufferData.copyInto(
-                destination = b,
-                destinationOffset = dstOffset,
-                startIndex = bufIndex,
-                endIndex = bufIndex + copyLen,
-            )
-            currentPosition += copyLen
-            totalRead += copyLen
-        }
+        return runBlocking {
+            val file = ensureOpenLocked()
+            if (currentPosition >= file.size) return@runBlocking -1
 
-        if (totalRead == 0) -1 else totalRead
+            val availableInFile = (file.size - currentPosition).coerceAtMost(len.toLong()).toInt()
+            if (availableInFile <= 0) return@runBlocking -1
+
+            var totalRead = 0
+            var dstOffset = off
+            var remaining = availableInFile
+
+            // 1. まず既存の内部バッファにヒットする領域があればそこからコピーする
+            if (bufferSize > 0 && isOffsetInBuffer(currentPosition)) {
+                val bufIndex = (currentPosition - bufferStartOffset).toInt()
+                val copyLen = minOf(remaining, bufferValidLength - bufIndex)
+                bufferData.copyInto(
+                    destination = b,
+                    destinationOffset = dstOffset,
+                    startIndex = bufIndex,
+                    endIndex = bufIndex + copyLen,
+                )
+                currentPosition += copyLen
+                dstOffset += copyLen
+                totalRead += copyLen
+                remaining -= copyLen
+            }
+
+            if (remaining == 0) {
+                return@runBlocking totalRead
+            }
+
+            // 2. 残りの要求サイズがバッファサイズ以上なら直接 SMB READ を発行する（ゼロコピー）
+            if (bufferSize <= 0 || remaining >= bufferSize) {
+                val readCount = file.readInto(currentPosition, b, dstOffset, remaining)
+                if (readCount > 0) {
+                    currentPosition += readCount
+                    totalRead += readCount
+                }
+                return@runBlocking if (totalRead == 0) -1 else totalRead
+            }
+
+            // 3. 小さな読み取りはバッファを補充してからコピーする
+            fillBufferLocked(file, currentPosition)
+            if (isOffsetInBuffer(currentPosition)) {
+                val bufIndex = (currentPosition - bufferStartOffset).toInt()
+                val copyLen = minOf(remaining, bufferValidLength - bufIndex)
+                bufferData.copyInto(
+                    destination = b,
+                    destinationOffset = dstOffset,
+                    startIndex = bufIndex,
+                    endIndex = bufIndex + copyLen,
+                )
+                currentPosition += copyLen
+                totalRead += copyLen
+            }
+
+            if (totalRead == 0) -1 else totalRead
+        }
     }
 
     /**
      * 現在位置から最大 [length] バイトを読み取り、新しいバイト配列として返す。
      */
-    suspend fun readBytes(length: Int): ByteArray {
+    fun readBytes(length: Int): ByteArray {
         require(length >= 0) { "length must be non-negative: $length" }
         if (length == 0) return ByteArray(0)
         val buf = ByteArray(length)
@@ -333,8 +366,8 @@ class SmbRandomAccessFile(
      * 現在位置から [len] バイトすべてを配列 [b]（開始位置 [off]）へ読み込む。
      * [len] バイト読み切る前にファイル末尾へ達した場合は [SmbEndOfFileException] を送出する。
      */
-    suspend fun readFully(b: ByteArray, off: Int = 0, len: Int = b.size - off) {
-        require(off >= 0 && len >= 0 && off + len <= b.size) {
+    fun readFully(b: ByteArray, off: Int = 0, len: Int = b.size - off) {
+        require(off >= 0 && len >= 0 && len <= b.size - off) {
             "Invalid buffer bounds: off=$off, len=$len, size=${b.size}"
         }
         var total = 0
@@ -350,77 +383,82 @@ class SmbRandomAccessFile(
     /**
      * 現在位置から 1 バイトを読み取り、`0` 以外なら `true`、`0` なら `false` を返す。
      */
-    suspend fun readBoolean(): Boolean = readByte().toInt() != 0
+    fun readBoolean(): Boolean = readByte().toInt() != 0
 
     /**
      * 現在位置からビッグエンディアンの符号付き 16 ビット整数を読み取る。
      */
-    suspend fun readShort(): Short {
-        val b1 = readUnsignedByte()
-        val b2 = readUnsignedByte()
-        return ((b1 shl 8) or b2).toShort()
+    fun readShort(): Short {
+        readFully(scratchBuffer, 0, 2)
+        return (((scratchBuffer[0].toInt() and 0xFF) shl 8) or (scratchBuffer[1].toInt() and 0xFF)).toShort()
     }
 
     /**
      * 現在位置からビッグエンディアンの符号なし 16 ビット整数を読み取る。
      */
-    suspend fun readUnsignedShort(): Int {
-        val b1 = readUnsignedByte()
-        val b2 = readUnsignedByte()
-        return (b1 shl 8) or b2
+    fun readUnsignedShort(): Int {
+        readFully(scratchBuffer, 0, 2)
+        return ((scratchBuffer[0].toInt() and 0xFF) shl 8) or (scratchBuffer[1].toInt() and 0xFF)
     }
 
     /**
      * 現在位置からビッグエンディアンの 32 ビット整数を読み取る。
      */
-    suspend fun readInt(): Int {
-        val b1 = readUnsignedByte()
-        val b2 = readUnsignedByte()
-        val b3 = readUnsignedByte()
-        val b4 = readUnsignedByte()
-        return (b1 shl 24) or (b2 shl 16) or (b3 shl 8) or b4
+    fun readInt(): Int {
+        readFully(scratchBuffer, 0, 4)
+        return ((scratchBuffer[0].toInt() and 0xFF) shl 24) or
+            ((scratchBuffer[1].toInt() and 0xFF) shl 16) or
+            ((scratchBuffer[2].toInt() and 0xFF) shl 8) or
+            (scratchBuffer[3].toInt() and 0xFF)
     }
 
     /**
      * 現在位置からビッグエンディアンの 64 ビット整数を読み取る。
      */
-    suspend fun readLong(): Long {
-        val hi = readInt().toLong() and 0xFFFF_FFFFL
-        val lo = readInt().toLong() and 0xFFFF_FFFFL
-        return (hi shl 32) or lo
+    fun readLong(): Long {
+        readFully(scratchBuffer, 0, 8)
+        return ((scratchBuffer[0].toLong() and 0xFFL) shl 56) or
+            ((scratchBuffer[1].toLong() and 0xFFL) shl 48) or
+            ((scratchBuffer[2].toLong() and 0xFFL) shl 40) or
+            ((scratchBuffer[3].toLong() and 0xFFL) shl 32) or
+            ((scratchBuffer[4].toLong() and 0xFFL) shl 24) or
+            ((scratchBuffer[5].toLong() and 0xFFL) shl 16) or
+            ((scratchBuffer[6].toLong() and 0xFFL) shl 8) or
+            (scratchBuffer[7].toLong() and 0xFFL)
     }
 
     /**
      * 現在位置へ下位 8 ビット（1 バイト）を書き込み、ファイルポインタを 1 進める。
      */
-    suspend fun write(b: Int) {
-        write(byteArrayOf(b.toByte()), 0, 1)
+    fun write(b: Int) {
+        scratchBuffer[0] = b.toByte()
+        write(scratchBuffer, 0, 1)
     }
 
     /**
      * 現在位置へ 1 バイトを書き込み、ファイルポインタを 1 進める。
      */
-    suspend fun writeByte(v: Int) {
+    fun writeByte(v: Int) {
         write(v)
     }
 
     /**
      * 現在位置へバイト配列 [b] の全内容を書き込み、ファイルポインタを進ませる。
      */
-    suspend fun write(b: ByteArray) {
+    fun write(b: ByteArray) {
         write(b, 0, b.size)
     }
 
     /**
      * 現在位置へバイト配列 [b] の [off] から [len] バイトを書き込み、実際に書き込まれた分だけファイルポインタを進める。
      */
-    suspend fun write(b: ByteArray, off: Int, len: Int): Int = mutex.withLock {
+    fun write(b: ByteArray, off: Int, len: Int): Int = runBlocking {
         check(mode.writable) { "File \"$path\" is opened in read-only mode (${mode.modeString})" }
-        require(off >= 0 && len >= 0 && off + len <= b.size) {
+        require(off >= 0 && len >= 0 && len <= b.size - off) {
             "Invalid buffer bounds: off=$off, len=$len, size=${b.size}"
         }
         val file = ensureOpenLocked()
-        if (len == 0) return@withLock 0
+        if (len == 0) return@runBlocking 0
 
         invalidateBuffer()
         val written = file.write(
@@ -436,49 +474,43 @@ class SmbRandomAccessFile(
     /**
      * 現在位置へ真偽値（1 バイト）を書き込む。
      */
-    suspend fun writeBoolean(v: Boolean) {
+    fun writeBoolean(v: Boolean) {
         write(if (v) 1 else 0)
     }
 
     /**
      * 現在位置へビッグエンディアンの 16 ビット整数を書き込む。
      */
-    suspend fun writeShort(v: Int) {
-        val bytes = byteArrayOf(
-            ((v ushr 8) and 0xFF).toByte(),
-            (v and 0xFF).toByte(),
-        )
-        write(bytes, 0, 2)
+    fun writeShort(v: Int) {
+        scratchBuffer[0] = ((v ushr 8) and 0xFF).toByte()
+        scratchBuffer[1] = (v and 0xFF).toByte()
+        write(scratchBuffer, 0, 2)
     }
 
     /**
      * 現在位置へビッグエンディアンの 32 ビット整数を書き込む。
      */
-    suspend fun writeInt(v: Int) {
-        val bytes = byteArrayOf(
-            ((v ushr 24) and 0xFF).toByte(),
-            ((v ushr 16) and 0xFF).toByte(),
-            ((v ushr 8) and 0xFF).toByte(),
-            (v and 0xFF).toByte(),
-        )
-        write(bytes, 0, 4)
+    fun writeInt(v: Int) {
+        scratchBuffer[0] = ((v ushr 24) and 0xFF).toByte()
+        scratchBuffer[1] = ((v ushr 16) and 0xFF).toByte()
+        scratchBuffer[2] = ((v ushr 8) and 0xFF).toByte()
+        scratchBuffer[3] = (v and 0xFF).toByte()
+        write(scratchBuffer, 0, 4)
     }
 
     /**
      * 現在位置へビッグエンディアンの 64 ビット整数を書き込む。
      */
-    suspend fun writeLong(v: Long) {
-        val bytes = byteArrayOf(
-            ((v ushr 56) and 0xFFL).toByte(),
-            ((v ushr 48) and 0xFFL).toByte(),
-            ((v ushr 40) and 0xFFL).toByte(),
-            ((v ushr 32) and 0xFFL).toByte(),
-            ((v ushr 24) and 0xFFL).toByte(),
-            ((v ushr 16) and 0xFFL).toByte(),
-            ((v ushr 8) and 0xFFL).toByte(),
-            (v and 0xFFL).toByte(),
-        )
-        write(bytes, 0, 8)
+    fun writeLong(v: Long) {
+        scratchBuffer[0] = ((v ushr 56) and 0xFFL).toByte()
+        scratchBuffer[1] = ((v ushr 48) and 0xFFL).toByte()
+        scratchBuffer[2] = ((v ushr 40) and 0xFFL).toByte()
+        scratchBuffer[3] = ((v ushr 32) and 0xFFL).toByte()
+        scratchBuffer[4] = ((v ushr 24) and 0xFFL).toByte()
+        scratchBuffer[5] = ((v ushr 16) and 0xFFL).toByte()
+        scratchBuffer[6] = ((v ushr 8) and 0xFFL).toByte()
+        scratchBuffer[7] = (v and 0xFFL).toByte()
+        write(scratchBuffer, 0, 8)
     }
 
     /**
@@ -487,7 +519,7 @@ class SmbRandomAccessFile(
      * 現在の [position] が [newLength] より大きい場合、`RandomAccessFile.setLength` と同様に
      * [position] は [newLength] へ移動する。
      */
-    suspend fun setLength(newLength: Long) = mutex.withLock {
+    fun setLength(newLength: Long) = runBlocking {
         check(mode.writable) { "File \"$path\" is opened in read-only mode (${mode.modeString})" }
         val file = ensureOpenLocked()
         invalidateBuffer()
@@ -500,7 +532,7 @@ class SmbRandomAccessFile(
     /**
      * サーバー側の書き込みバッファをディスクへフラッシュする (`SMB2 FLUSH`)。
      */
-    suspend fun flush() = mutex.withLock {
+    fun flush() = runBlocking {
         val file = ensureOpenLocked()
         file.flush()
     }
@@ -508,27 +540,26 @@ class SmbRandomAccessFile(
     /**
      * リモート SMB ファイルハンドルをサーバー上で閉じ、内部バッファを解放する (`SMB2 CLOSE`)。
      */
-    suspend fun closeSuspend() = mutex.withLock {
-        if (closed) return@withLock
+    suspend fun closeSuspend() {
+        if (closed) return
         closed = true
         invalidateBuffer()
+        bufferData = ByteArray(0)
         val file = smbFile
         smbFile = null
         file?.closeSuspend()
     }
 
     override fun close() {
-        closed = true
-        invalidateBuffer()
-        smbFile?.close()
-        smbFile = null
+        if (closed) return
+        runBlocking {
+            closeSuspend()
+        }
     }
 
     private fun requireOpenFile(): SmbFile {
         check(!closed) { "SmbRandomAccessFile is closed" }
-        return smbFile ?: throw IllegalStateException(
-            "SmbRandomAccessFile for \"$path\" is not open. Call open() or share.openRandomAccessFile() first.",
-        )
+        return smbFile ?: runBlocking { ensureOpenLocked() }
     }
 
     private suspend fun ensureOpenLocked(): SmbFile {
@@ -583,24 +614,25 @@ class SmbRandomAccessFile(
             invalidateBuffer()
             return
         }
-        val fetched = file.read(fromOffset, toRead)
-        if (fetched.isEmpty()) {
+        if (bufferData.size < toRead) {
+            bufferData = ByteArray(bufferSize)
+        }
+        val fetchedCount = file.readInto(fromOffset, bufferData, 0, toRead)
+        if (fetchedCount <= 0) {
             invalidateBuffer()
             return
         }
         bufferStartOffset = fromOffset
-        bufferData = fetched
-        bufferValidLength = fetched.size
+        bufferValidLength = fetchedCount
     }
 
     private fun invalidateBuffer() {
         bufferStartOffset = -1L
         bufferValidLength = 0
-        bufferData = ByteArray(0)
     }
 
     companion object {
-        const val DEFAULT_BUFFER_SIZE: Int = 64 * 1024
+        const val DEFAULT_BUFFER_SIZE: Int = 0
 
         /**
          * 指定した共有フォルダ [share] 上の [path] を [mode]（`"r"`, `"rw"`, `"rws"`, `"rwd"`）で開き、
