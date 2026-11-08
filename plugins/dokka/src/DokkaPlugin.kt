@@ -52,7 +52,7 @@ fun generateDokkaHtml(
             DokkaSourceSetImpl(
                 displayName = "common",
                 sourceSetID = DokkaSourceSetID(scopeId = moduleName, sourceSetName = "commonMain"),
-                analysisPlatform = Platform.common,
+                analysisPlatform = Platform.jvm,
                 classpath = classpathFiles,
                 sourceRoots = setOf(srcDir.toFile()),
                 documentedVisibilities = setOf(

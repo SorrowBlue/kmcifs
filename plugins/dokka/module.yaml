@@ -5,4 +5,4 @@ description: Generates Dokka HTML API documentation
 dependencies:
   - $libs.dokka.core
   - $libs.dokka.base
-  - $libs.dokka.analysis.kotlin.descriptors
+  - $libs.dokka.analysis.kotlin.symbols
