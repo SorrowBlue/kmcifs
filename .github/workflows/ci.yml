@@ -33,8 +33,8 @@ jobs:
           gh extension install github/gh-actions-lock
           gh actions-lock --verify-local
 
-  test-and-build:
-    name: Test & Build (${{ matrix.name }})
+  test:
+    name: Test (${{ matrix.name }})
     needs: verify-lock
     runs-on: ${{ matrix.os }}
     strategy:
@@ -43,20 +43,13 @@ jobs:
         include:
           - name: Linux / JVM / Android
             os: ubuntu-latest
-            test_cmd: ./kotlin test -m kmcifs-client -p jvm -p android -p linuxX64
-            build_cmd: |
-              ./kotlin build -m kmcifs-client -p linuxArm64
-              ./kotlin build -m jvmApp -m linuxApp
+            cmd: ./kotlin test -m kmcifs-client -m sample -p jvm -p android -p linuxX64
           - name: Windows (mingwX64)
             os: windows-latest
-            test_cmd: ./kotlin.bat test -m kmcifs-client -p mingwX64
-            build_cmd: ./kotlin.bat build -m windowsApp
+            cmd: ./kotlin.bat test -m kmcifs-client -m sample -p mingwX64
           - name: macOS / iOS
             os: macos-latest
-            test_cmd: ./kotlin test -m kmcifs-client -p macosArm64 -p iosSimulatorArm64
-            build_cmd: |
-              ./kotlin build -m kmcifs-client -p iosArm64
-              ./kotlin build -m macosApp
+            cmd: ./kotlin test -m kmcifs-client -m sample -p macosArm64 -p iosSimulatorArm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
@@ -64,15 +57,36 @@ jobs:
       - name: Set up Kotlin Toolchain
         uses: $/.github/actions/setup-kotlin
 
-      - name: Run kmcifs-client tests
-        run: ${{ matrix.test_cmd }}
+      - name: Run tests
+        run: ${{ matrix.cmd }}
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: verify-lock
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux / JVM / Android / Windows
+            os: ubuntu-latest
+            cmd: ./kotlin build
+          - name: macOS / iOS
+            os: macos-latest
+            cmd: ./kotlin build -m kmcifs-client -m sample -m macosApp -p macosArm64 -p iosArm64 -p iosSimulatorArm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Kotlin Toolchain
+        uses: $/.github/actions/setup-kotlin
 
       - name: Build targets and sample apps
-        run: ${{ matrix.build_cmd }}
+        run: ${{ matrix.cmd }}
 
   publish-snapshot:
     name: Publish SNAPSHOT to Maven Central
-    needs: test-and-build
+    needs: [test, build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: snapshot
