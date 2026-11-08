@@ -5,6 +5,8 @@
   ],
   "timezone": "Asia/Tokyo",
   "semanticCommits": "enabled",
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 5,
   "labels": [
     "dependencies"
   ],
