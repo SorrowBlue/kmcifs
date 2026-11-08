@@ -6,7 +6,7 @@ trigger: always_on
 
 - **内部推論 (Internal Reasoning):** 精度を保つため英語が許可/推奨されます。ただし、ツール呼び出し時のパラメータ（上記 `TaskName` 等）は、出力直前に必ず日本語へ翻訳してください。
 - **コード (Code):** 標準的な英語を使用してください（コード、変数名、KDoc）。KDoc は英語で記述してください。
-- **コミットメッセージ:** [.agent/rules/git-commit-rules.md](file:///.agent/rules/git-commit-rules.md) のルールに従ってください。
+- **コミットメッセージ・Pull Request (Commit Messages & PRs):** コミットメッセージおよび Pull Request（タイトル・本文）は常に**英語**で記述してください（詳細は [.agents/rules/git-commit-rules.md](file:///.agents/rules/git-commit-rules.md) を参照）。
 - **ユーザー向け出力 (User-Facing):** **日本語** でなければなりません。
   - **チャット (Chat):** 常に日本語を使用してください。
   - **成果物 (Artifacts):** `task.md`, `implementation_plan.md`, `agents_adjustment_proposal.md`, `walkthrough.md` などのファイル内容は必ず **日本語** で記述してください。
