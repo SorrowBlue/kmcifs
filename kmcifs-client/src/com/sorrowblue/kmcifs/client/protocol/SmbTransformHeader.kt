@@ -78,6 +78,7 @@ internal object SmbTransformHeader {
         transformPacket: ByteArray,
         cipherId: SmbCipherId,
         decryptionKey: ByteArray,
+        expectedSessionId: ULong = 0uL,
     ): ByteArray {
         require(isTransformPacket(transformPacket)) { "Packet does not start with SMB3 Transform Header" }
         val signature = transformPacket.copyOfRange(4, 20)
@@ -86,6 +87,12 @@ internal object SmbTransformHeader {
         val originalSize = transformPacket.readUIntLE(36).toInt()
         val flags = transformPacket.readUShortLE(42)
         require(flags == 0x0001u.toUShort()) { "Unsupported SMB3 Transform Header flags: 0x${flags.toString(16)}" }
+        val transformSessionId = transformPacket.readULongLE(44)
+        if (expectedSessionId != 0uL) {
+            require(transformSessionId == expectedSessionId) {
+                "SMB3 Transform Header SessionId mismatch: expected $expectedSessionId, got $transformSessionId"
+            }
+        }
 
         val aad = transformPacket.copyOfRange(20, 52)
         require(originalSize >= SmbHeader.SIZE && originalSize <= transformPacket.size - SIZE) {
@@ -97,9 +104,29 @@ internal object SmbTransformHeader {
             transformPacket.copyOfRange(SIZE, SIZE + originalSize)
         }
 
-        return when (cipherId) {
+        val plainPacket = when (cipherId) {
             SmbCipherId.AES_128_CCM -> Aes.ccmDecrypt(decryptionKey, rawNonce, aad, ciphertext, signature)
             SmbCipherId.AES_128_GCM -> Aes.gcmDecrypt(decryptionKey, rawNonce, aad, ciphertext, signature)
         }
+
+        // MS-SMB2 3.2.5.1.1.1: Verify inner SMB2 header SessionId for each message in a (possibly compounded) packet
+        if (expectedSessionId != 0uL && plainPacket.size >= SmbHeader.SIZE) {
+            var offset = 0
+            while (offset <= plainPacket.size - SmbHeader.SIZE) {
+                val innerFlags = plainPacket.readUIntLE(offset + 16)
+                val innerSessionId = plainPacket.readULongLE(offset + 40)
+                val isRelatedSentinel = (innerFlags and SmbHeader.SMB2_FLAGS_RELATED_OPERATIONS) != 0u &&
+                    innerSessionId == 0xFFFFFFFFFFFFFFFFuL
+                if (!isRelatedSentinel) {
+                    require(innerSessionId == transformSessionId) {
+                        "Inner SMB2 header SessionId ($innerSessionId) does not match Transform Header SessionId ($transformSessionId)"
+                    }
+                }
+                val nextCommand = plainPacket.readUIntLE(offset + 20).toInt()
+                if (nextCommand < SmbHeader.SIZE || nextCommand > plainPacket.size - offset - SmbHeader.SIZE) break
+                offset += nextCommand
+            }
+        }
+        return plainPacket
     }
 }

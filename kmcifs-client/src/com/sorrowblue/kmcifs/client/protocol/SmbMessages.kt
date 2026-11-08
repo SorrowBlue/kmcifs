@@ -37,6 +37,7 @@ internal object SmbMessages {
     // Negotiate Context Types (SMB 3.1.1)
     private const val SMB2_PREAUTH_INTEGRITY_CAPABILITIES: UShort = 0x0001u
     private const val SMB2_ENCRYPTION_CAPABILITIES: UShort = 0x0002u
+    private const val SHA_512_HASH_ALGORITHM: UShort = 0x0001u
 
     // Lock Flags
     const val SMB2_LOCKFLAG_SHARED_LOCK: UInt = 0x00000001u
@@ -114,7 +115,6 @@ internal object SmbMessages {
             val unalignedOffset = SmbHeader.SIZE + baseBodySize
             val padTo8 = (8 - (unalignedOffset % 8)) % 8
             contextOffsetInPacket = unalignedOffset + padTo8
-            contextCount = 2
 
             // Context 1: SMB2_PREAUTH_INTEGRITY_CAPABILITIES (HashAlgorithmCount=1 (SHA-512=0x0001), SaltLength=32)
             val salt = Random.Default.nextBytes(32)
@@ -124,19 +124,26 @@ internal object SmbMessages {
             preauthData.writeUShortLE(4, 0x0001u) // SHA-512
             salt.copyInto(preauthData, 6)
             val ctx1 = buildNegotiateContext(SMB2_PREAUTH_INTEGRITY_CAPABILITIES, preauthData)
-            val ctx1Pad = (8 - (ctx1.size % 8)) % 8
 
-            // Context 2: SMB2_ENCRYPTION_CAPABILITIES
-            val encData = ByteArray(2 + ciphers.size * 2)
-            encData.writeUShortLE(0, ciphers.size.toUShort())
-            ciphers.forEachIndexed { idx, cipher ->
-                encData.writeUShortLE(2 + idx * 2, cipher.code)
+            if (ciphers.isNotEmpty()) {
+                contextCount = 2
+                val ctx1Pad = (8 - (ctx1.size % 8)) % 8
+                // Context 2: SMB2_ENCRYPTION_CAPABILITIES (MS-SMB2 2.2.3.1.2: CipherCount > 0)
+                val encData = ByteArray(2 + ciphers.size * 2)
+                encData.writeUShortLE(0, ciphers.size.toUShort())
+                ciphers.forEachIndexed { idx, cipher ->
+                    encData.writeUShortLE(2 + idx * 2, cipher.code)
+                }
+                val ctx2 = buildNegotiateContext(SMB2_ENCRYPTION_CAPABILITIES, encData)
+
+                contextBlock = ByteArray(padTo8 + ctx1.size + ctx1Pad + ctx2.size)
+                ctx1.copyInto(contextBlock, padTo8)
+                ctx2.copyInto(contextBlock, padTo8 + ctx1.size + ctx1Pad)
+            } else {
+                contextCount = 1
+                contextBlock = ByteArray(padTo8 + ctx1.size)
+                ctx1.copyInto(contextBlock, padTo8)
             }
-            val ctx2 = buildNegotiateContext(SMB2_ENCRYPTION_CAPABILITIES, encData)
-
-            contextBlock = ByteArray(padTo8 + ctx1.size + ctx1Pad + ctx2.size)
-            ctx1.copyInto(contextBlock, padTo8)
-            ctx2.copyInto(contextBlock, padTo8 + ctx1.size + ctx1Pad)
         } else {
             contextBlock = ByteArray(0)
             contextOffsetInPacket = 0
@@ -147,8 +154,8 @@ internal object SmbMessages {
         val header = SmbHeader.withTreeId(
             command = SmbCommand.NEGOTIATE,
             messageId = messageId,
-            creditCharge = 1u,
-            creditRequest = 31u
+            creditCharge = 0u, // MS-SMB2 2.2.3 / 3.2.4.2.2: CreditCharge MUST be 0 in NEGOTIATE
+            creditRequest = 31u,
         )
         header.encodeInto(packet, 0)
 
@@ -158,10 +165,11 @@ internal object SmbMessages {
         packet.writeUShortLE(bodyOffset + 4, SMB2_NEGOTIATE_SIGNING_ENABLED)
         packet.writeUShortLE(bodyOffset + 6, 0u) // Reserved
 
-        val capabilities = if (hasSmb3) {
-            SMB2_GLOBAL_CAP_LARGE_MTU or SMB2_GLOBAL_CAP_ENCRYPTION
-        } else {
-            SMB2_GLOBAL_CAP_LARGE_MTU
+        val hasMultiCredit = dialects.any { it != SmbDialect.SMB_2_0_2 }
+        val capabilities = when {
+            hasSmb3 -> SMB2_GLOBAL_CAP_LARGE_MTU or SMB2_GLOBAL_CAP_ENCRYPTION
+            hasMultiCredit -> SMB2_GLOBAL_CAP_LARGE_MTU
+            else -> 0u // MS-SMB2 2.2.3: Capabilities MUST be 0 when only SMB 2.0.2 is offered
         }
         packet.writeUIntLE(bodyOffset + 8, capabilities)
         clientGuid.copyInto(packet, bodyOffset + 12, 0, 16)
@@ -232,31 +240,60 @@ internal object SmbMessages {
         val secBufLen = packet.readUShortLE(bodyOffset + 58).toInt()
         val negotiateContextOffset = packet.readUIntLE(bodyOffset + 60).toInt()
 
-        val secBuffer = if (secBufLen > 0 && secBufOffset + secBufLen <= packet.size) {
+        val secBuffer = if (secBufLen > 0 && secBufOffset >= SmbHeader.SIZE && secBufLen <= packet.size - secBufOffset) {
             packet.copyOfRange(secBufOffset, secBufOffset + secBufLen)
         } else {
             ByteArray(0)
         }
 
         var selectedCipher: SmbCipherId? = null
-        if (dialect == SmbDialect.SMB_3_1_1 && negotiateContextCount > 0 && negotiateContextOffset > 0) {
-            var pos = negotiateContextOffset
-            for (i in 0 until negotiateContextCount) {
-                if (pos + 8 > packet.size) break
-                val ctxType = packet.readUShortLE(pos)
-                val ctxLen = packet.readUShortLE(pos + 2).toInt()
-                val dataStart = pos + 8
-                if (dataStart + ctxLen > packet.size) break
-                if (ctxType == SMB2_ENCRYPTION_CAPABILITIES && ctxLen >= 4) {
-                    val cipherCount = packet.readUShortLE(dataStart).toInt()
-                    if (cipherCount >= 1) {
-                        val cipherCode = packet.readUShortLE(dataStart + 2)
-                        selectedCipher = SmbCipherId.fromCode(cipherCode)
+        if (dialect == SmbDialect.SMB_3_1_1) {
+            var preauthIntegrityHashId: UShort = 0u
+            if (negotiateContextCount > 0 && negotiateContextOffset >= SmbHeader.SIZE) {
+                var pos = negotiateContextOffset
+                for (i in 0 until negotiateContextCount) {
+                    if (pos > packet.size - 8) break
+                    val ctxType = packet.readUShortLE(pos)
+                    val ctxLen = packet.readUShortLE(pos + 2).toInt()
+                    val dataStart = pos + 8
+                    if (ctxLen < 0 || ctxLen > packet.size - dataStart) break
+                    when (ctxType) {
+                        SMB2_PREAUTH_INTEGRITY_CAPABILITIES -> {
+                            if (ctxLen >= 6) {
+                                val hashAlgCount = packet.readUShortLE(dataStart).toInt()
+                                if (hashAlgCount == 1) {
+                                    preauthIntegrityHashId = packet.readUShortLE(dataStart + 4)
+                                }
+                            }
+                        }
+                        SMB2_ENCRYPTION_CAPABILITIES -> {
+                            if (ctxLen >= 4) {
+                                val cipherCount = packet.readUShortLE(dataStart).toInt()
+                                if (cipherCount >= 1) {
+                                    val cipherCode = packet.readUShortLE(dataStart + 2)
+                                    selectedCipher = if (cipherCode == 0u.toUShort()) {
+                                        null
+                                    } else {
+                                        SmbCipherId.fromCode(cipherCode)
+                                            ?: throw SmbException(
+                                                NtStatus.STATUS_INVALID_NETWORK_RESPONSE,
+                                                "Server selected unsupported cipher: 0x${cipherCode.toString(16)}",
+                                            )
+                                    }
+                                }
+                            }
+                        }
                     }
+                    val nextPos = dataStart + ctxLen
+                    val pad = (8 - (nextPos % 8)) % 8
+                    pos = nextPos + pad
                 }
-                val nextPos = dataStart + ctxLen
-                val pad = (8 - (nextPos % 8)) % 8
-                pos = nextPos + pad
+            }
+            if (preauthIntegrityHashId != SHA_512_HASH_ALGORITHM) {
+                throw SmbException(
+                    NtStatus.STATUS_INVALID_NETWORK_RESPONSE,
+                    "SMB 3.1.1 server did not negotiate SHA-512 preauth integrity capability"
+                )
             }
         } else if (dialect == SmbDialect.SMB_3_0_0 || dialect == SmbDialect.SMB_3_0_2) {
             if ((capabilities and SMB2_GLOBAL_CAP_ENCRYPTION) != 0u) {
@@ -320,7 +357,7 @@ internal object SmbMessages {
         val secBufOffset = packet.readUShortLE(bodyOffset + 4).toInt()
         val secBufLen = packet.readUShortLE(bodyOffset + 6).toInt()
 
-        val secBuffer = if (secBufLen > 0 && secBufOffset + secBufLen <= packet.size) {
+        val secBuffer = if (secBufLen > 0 && secBufOffset >= SmbHeader.SIZE && secBufLen <= packet.size - secBufOffset) {
             packet.copyOfRange(secBufOffset, secBufOffset + secBufLen)
         } else {
             ByteArray(0)
@@ -474,8 +511,8 @@ internal object SmbMessages {
         val lastAccessTime = filetimeToEpochMillis(packet.readULongLE(bodyOffset + 16))
         val lastWriteTime = filetimeToEpochMillis(packet.readULongLE(bodyOffset + 24))
         val changeTime = filetimeToEpochMillis(packet.readULongLE(bodyOffset + 32))
-        val allocationSize = packet.readULongLE(bodyOffset + 40).toLong()
-        val endOfFile = packet.readULongLE(bodyOffset + 48).toLong()
+        val allocationSize = packet.readULongLE(bodyOffset + 40).toLong().coerceAtLeast(0L)
+        val endOfFile = packet.readULongLE(bodyOffset + 48).toLong().coerceAtLeast(0L)
         val fileAttributes = packet.readUIntLE(bodyOffset + 56)
         val persistentId = packet.readULongLE(bodyOffset + 64)
         val volatileId = packet.readULongLE(bodyOffset + 72)
@@ -588,11 +625,11 @@ internal object SmbMessages {
 
     /**
      * QUERY_DIRECTORY レスポンスからエントリ一覧を解析する。
-     * `STATUS_NO_MORE_FILES` の場合は空リストを返す。
+     * `STATUS_NO_MORE_FILES` または `STATUS_NO_SUCH_FILE` の場合は `null` を返す。
      */
     fun parseQueryDirectoryResponse(packet: ByteArray, excludeDotEntries: Boolean = true): List<SmbDirectoryEntry>? {
         val header = SmbHeader.decode(packet)
-        if (header.status == NtStatus.STATUS_NO_MORE_FILES) {
+        if (header.status == NtStatus.STATUS_NO_MORE_FILES || header.status == NtStatus.STATUS_NO_SUCH_FILE) {
             return null
         }
         if (header.status != NtStatus.STATUS_SUCCESS) {
@@ -603,7 +640,7 @@ internal object SmbMessages {
         val bodyOffset = SmbHeader.SIZE
         val outBufOffset = packet.readUShortLE(bodyOffset + 2).toInt()
         val outBufLen = packet.readUIntLE(bodyOffset + 4).toInt()
-        if (outBufLen <= 0 || outBufOffset + outBufLen > packet.size) {
+        if (outBufOffset < SmbHeader.SIZE + 8 || outBufLen <= 0 || outBufLen > packet.size - outBufOffset) {
             return emptyList()
         }
 
@@ -611,20 +648,20 @@ internal object SmbMessages {
         var entryPos = outBufOffset
         val endPos = outBufOffset + outBufLen
 
-        while (entryPos + 104 <= endPos) {
+        while (entryPos <= endPos - 104) {
             val nextEntryOffset = packet.readUIntLE(entryPos).toInt()
             val creationTime = filetimeToEpochMillis(packet.readULongLE(entryPos + 8))
             val lastAccessTime = filetimeToEpochMillis(packet.readULongLE(entryPos + 16))
             val lastWriteTime = filetimeToEpochMillis(packet.readULongLE(entryPos + 24))
             val changeTime = filetimeToEpochMillis(packet.readULongLE(entryPos + 32))
-            val endOfFile = packet.readULongLE(entryPos + 40).toLong()
-            val allocationSize = packet.readULongLE(entryPos + 48).toLong()
+            val endOfFile = packet.readULongLE(entryPos + 40).toLong().coerceAtLeast(0L)
+            val allocationSize = packet.readULongLE(entryPos + 48).toLong().coerceAtLeast(0L)
             val fileAttributes = packet.readUIntLE(entryPos + 56)
             val fileNameLength = packet.readUIntLE(entryPos + 60).toInt()
             val fileId = packet.readULongLE(entryPos + 96)
 
             val nameStart = entryPos + 104
-            if (nameStart + fileNameLength <= endPos) {
+            if (fileNameLength >= 0 && fileNameLength <= endPos - nameStart) {
                 val name = packet.decodeFromUtf16LE(nameStart, fileNameLength)
                 if (!excludeDotEntries || (name != "." && name != "..")) {
                     result.add(
@@ -644,6 +681,7 @@ internal object SmbMessages {
             }
 
             if (nextEntryOffset == 0) break
+            if (nextEntryOffset < 104 || nextEntryOffset > endPos - entryPos) break
             entryPos += nextEntryOffset
         }
 
@@ -691,7 +729,7 @@ internal object SmbMessages {
         return packet
     }
 
-    fun parseReadResponse(packet: ByteArray): ByteArray {
+    fun parseReadResponse(packet: ByteArray, maxLength: Int = Int.MAX_VALUE): ByteArray {
         val header = SmbHeader.decode(packet)
         if (header.status == NtStatus.STATUS_END_OF_FILE) {
             return ByteArray(0)
@@ -703,10 +741,11 @@ internal object SmbMessages {
         val bodyOffset = SmbHeader.SIZE
         val dataOffset = packet[bodyOffset + 2].toInt() and 0xFF
         val dataLength = packet.readUIntLE(bodyOffset + 4).toInt()
-        if (dataLength <= 0 || dataOffset + dataLength > packet.size) {
+        if (dataOffset < SmbHeader.SIZE + 16 || dataLength <= 0 || dataLength > packet.size - dataOffset) {
             return ByteArray(0)
         }
-        return packet.copyOfRange(dataOffset, dataOffset + dataLength)
+        val toCopy = minOf(dataLength, maxLength)
+        return packet.copyOfRange(dataOffset, dataOffset + toCopy)
     }
 
     /**
@@ -731,7 +770,7 @@ internal object SmbMessages {
         val bodyOffset = SmbHeader.SIZE
         val dataOffset = packet[bodyOffset + 2].toInt() and 0xFF
         val dataLength = packet.readUIntLE(bodyOffset + 4).toInt()
-        if (dataLength <= 0 || dataOffset + dataLength > packet.size) {
+        if (dataOffset < SmbHeader.SIZE + 16 || dataLength <= 0 || dataLength > packet.size - dataOffset) {
             return 0
         }
         val toCopy = minOf(dataLength, maxLength)
@@ -886,7 +925,7 @@ internal object SmbMessages {
      * `FileRenameInformation` (Class 10): ファイルまたはディレクトリのリネーム・移動。
      */
     fun buildFileRenamePayload(newTargetPath: String, replaceIfExists: Boolean = true): ByteArray {
-        val normalized = newTargetPath.trimStart('/', '\\').replace('/', '\\')
+        val normalized = newTargetPath.trim('/', '\\').replace('/', '\\')
         val nameBytes = normalized.encodeToUtf16LE()
         val buf = ByteArray(20 + nameBytes.size)
         buf[0] = if (replaceIfExists) 1 else 0
@@ -961,7 +1000,7 @@ internal object SmbMessages {
         val bodyOffset = SmbHeader.SIZE
         val outputOffset = packet.readUIntLE(bodyOffset + 32).toInt()
         val outputCount = packet.readUIntLE(bodyOffset + 36).toInt()
-        if (outputCount <= 0 || outputOffset + outputCount > packet.size) {
+        if (outputOffset < SmbHeader.SIZE + 48 || outputCount <= 0 || outputCount > packet.size - outputOffset) {
             return ByteArray(0)
         }
         return packet.copyOfRange(outputOffset, outputOffset + outputCount)
@@ -1026,22 +1065,23 @@ internal object SmbMessages {
     fun splitCompoundPacket(packet: ByteArray): List<ByteArray> {
         if (packet.size < SmbHeader.SIZE) return listOf(packet)
         val firstNext = packet.readUIntLE(20).toInt()
-        if (firstNext <= 0 || firstNext >= packet.size) {
+        if (firstNext < SmbHeader.SIZE || firstNext > packet.size - SmbHeader.SIZE) {
             return listOf(packet)
         }
 
         val results = mutableListOf<ByteArray>()
         var offset = 0
-        while (offset + SmbHeader.SIZE <= packet.size) {
+        while (offset <= packet.size - SmbHeader.SIZE) {
             val nextCmd = packet.readUIntLE(offset + 20).toInt()
-            val end = if (nextCmd > 0 && offset + nextCmd <= packet.size) {
+            val hasValidNext = nextCmd >= SmbHeader.SIZE && nextCmd <= packet.size - offset - SmbHeader.SIZE
+            val end = if (hasValidNext) {
                 offset + nextCmd
             } else {
                 packet.size
             }
             val single = packet.copyOfRange(offset, end)
             results.add(single)
-            if (nextCmd <= 0 || offset + nextCmd >= packet.size) break
+            if (!hasValidNext) break
             offset += nextCmd
         }
         return results

@@ -51,9 +51,15 @@ internal class KtorTcpSmbTransport private constructor(
 
     override suspend fun receivePacket(): ByteArray {
         readChannel.readFully(receivePrefix, 0, 4)
+        check(receivePrefix[0].toInt() == 0) {
+            "Invalid Direct TCP stream protocol header byte: 0x${(receivePrefix[0].toInt() and 0xFF).toString(16)}"
+        }
         val length = ((receivePrefix[1].toInt() and 0xFF) shl 16) or
             ((receivePrefix[2].toInt() and 0xFF) shl 8) or
             (receivePrefix[3].toInt() and 0xFF)
+        check(length >= SmbHeader.SIZE) {
+            "Direct TCP frame length ($length) is smaller than minimum SMB2 header size (${SmbHeader.SIZE})"
+        }
         val payload = ByteArray(length)
         if (length > 0) {
             readChannel.readFully(payload, 0, length)
@@ -69,16 +75,19 @@ internal class KtorTcpSmbTransport private constructor(
     companion object {
         suspend fun connect(host: String, port: Int, connectTimeoutMillis: Long): KtorTcpSmbTransport {
             val selectorManager = SelectorManager(Dispatchers.IO)
+            var socket: Socket? = null
             return try {
-                val socket = withTimeout(connectTimeoutMillis) {
+                val connected = withTimeout(connectTimeoutMillis) {
                     aSocket(selectorManager).tcp().connect(host, port) {
                         noDelay = true
                     }
                 }
-                val readChannel = socket.openReadChannel()
-                val writeChannel = socket.openWriteChannel(autoFlush = false)
-                KtorTcpSmbTransport(selectorManager, socket, readChannel, writeChannel)
+                socket = connected
+                val readChannel = connected.openReadChannel()
+                val writeChannel = connected.openWriteChannel(autoFlush = false)
+                KtorTcpSmbTransport(selectorManager, connected, readChannel, writeChannel)
             } catch (e: Throwable) {
+                runCatching { socket?.close() }
                 runCatching { selectorManager.close() }
                 throw e
             }
