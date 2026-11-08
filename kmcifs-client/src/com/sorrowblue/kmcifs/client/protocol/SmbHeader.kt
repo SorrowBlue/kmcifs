@@ -172,11 +172,14 @@ internal data class SmbHeader(
          */
         fun verifyPacketSignature(packet: ByteArray, dialect: SmbDialect, signingKey: ByteArray): Boolean {
             val receivedSig = packet.copyOfRange(48, 64)
-            val copy = packet.copyOf()
             for (i in 48 until 64) {
-                copy[i] = 0
+                packet[i] = 0
             }
-            val expectedSig = computeSignature(copy, dialect, signingKey)
+            val expectedSig = try {
+                computeSignature(packet, dialect, signingKey)
+            } finally {
+                receivedSig.copyInto(packet, 48, 0, 16)
+            }
             return Aes.constantTimeEquals(receivedSig, expectedSig)
         }
 

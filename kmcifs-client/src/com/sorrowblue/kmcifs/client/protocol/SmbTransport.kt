@@ -32,25 +32,28 @@ internal class KtorTcpSmbTransport private constructor(
     private val writeChannel: ByteWriteChannel,
 ) : SmbPacketTransport {
 
+    private val sendPrefix = ByteArray(4)
+    private val receivePrefix = ByteArray(4)
+
     override suspend fun sendPacket(packet: ByteArray) {
         val len = packet.size
-        val framed = ByteArray(4 + len)
-        framed[0] = 0x00 // Direct TCP Stream Protocol Header (0x00 + 24-bit big-endian length)
-        framed[1] = ((len ushr 16) and 0xFF).toByte()
-        framed[2] = ((len ushr 8) and 0xFF).toByte()
-        framed[3] = (len and 0xFF).toByte()
-        packet.copyInto(framed, 4)
+        sendPrefix[0] = 0x00 // Direct TCP Stream Protocol Header (0x00 + 24-bit big-endian length)
+        sendPrefix[1] = ((len ushr 16) and 0xFF).toByte()
+        sendPrefix[2] = ((len ushr 8) and 0xFF).toByte()
+        sendPrefix[3] = (len and 0xFF).toByte()
 
-        writeChannel.writeFully(framed, 0, framed.size)
+        writeChannel.writeFully(sendPrefix, 0, 4)
+        if (len > 0) {
+            writeChannel.writeFully(packet, 0, len)
+        }
         writeChannel.flush()
     }
 
     override suspend fun receivePacket(): ByteArray {
-        val prefix = ByteArray(4)
-        readChannel.readFully(prefix, 0, 4)
-        val length = ((prefix[1].toInt() and 0xFF) shl 16) or
-            ((prefix[2].toInt() and 0xFF) shl 8) or
-            (prefix[3].toInt() and 0xFF)
+        readChannel.readFully(receivePrefix, 0, 4)
+        val length = ((receivePrefix[1].toInt() and 0xFF) shl 16) or
+            ((receivePrefix[2].toInt() and 0xFF) shl 8) or
+            (receivePrefix[3].toInt() and 0xFF)
         val payload = ByteArray(length)
         if (length > 0) {
             readChannel.readFully(payload, 0, length)

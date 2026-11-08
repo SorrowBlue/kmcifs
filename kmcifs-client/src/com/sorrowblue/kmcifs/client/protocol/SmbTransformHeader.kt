@@ -88,10 +88,14 @@ internal object SmbTransformHeader {
         require(flags == 0x0001u.toUShort()) { "Unsupported SMB3 Transform Header flags: 0x${flags.toString(16)}" }
 
         val aad = transformPacket.copyOfRange(20, 52)
-        require(transformPacket.size >= SIZE + originalSize) {
-            "Transform packet truncated: expected ${SIZE + originalSize}, got ${transformPacket.size}"
+        require(originalSize >= SmbHeader.SIZE && originalSize <= transformPacket.size - SIZE) {
+            "Transform packet invalid or truncated: originalSize=$originalSize, packetSize=${transformPacket.size}"
         }
-        val ciphertext = transformPacket.copyOfRange(SIZE, SIZE + originalSize)
+        val ciphertext = if (transformPacket.size == SIZE + originalSize) {
+            transformPacket.copyOfRange(SIZE, transformPacket.size)
+        } else {
+            transformPacket.copyOfRange(SIZE, SIZE + originalSize)
+        }
 
         return when (cipherId) {
             SmbCipherId.AES_128_CCM -> Aes.ccmDecrypt(decryptionKey, rawNonce, aad, ciphertext, signature)

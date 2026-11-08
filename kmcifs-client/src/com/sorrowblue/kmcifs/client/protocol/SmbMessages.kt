@@ -334,7 +334,7 @@ internal object SmbMessages {
         )
     }
 
-    fun buildLogoffRequest(messageId: ULong, sessionId: ULong): ByteArray {
+    fun buildLogoffRequest(messageId: ULong = 0uL, sessionId: ULong): ByteArray {
         val packet = ByteArray(SmbHeader.SIZE + 4)
         val header = SmbHeader.withTreeId(
             command = SmbCommand.LOGOFF,
@@ -352,7 +352,7 @@ internal object SmbMessages {
     // =========================================================================
 
     fun buildTreeConnectRequest(
-        messageId: ULong,
+        messageId: ULong = 0uL,
         sessionId: ULong,
         uncPath: String,
     ): ByteArray {
@@ -398,7 +398,7 @@ internal object SmbMessages {
         )
     }
 
-    fun buildTreeDisconnectRequest(messageId: ULong, sessionId: ULong, treeId: UInt): ByteArray {
+    fun buildTreeDisconnectRequest(messageId: ULong = 0uL, sessionId: ULong, treeId: UInt): ByteArray {
         val packet = ByteArray(SmbHeader.SIZE + 4)
         val header = SmbHeader.withTreeId(
             command = SmbCommand.TREE_DISCONNECT,
@@ -417,7 +417,7 @@ internal object SmbMessages {
     // =========================================================================
 
     fun buildCreateRequest(
-        messageId: ULong,
+        messageId: ULong = 0uL,
         sessionId: ULong,
         treeId: UInt,
         path: String,
@@ -427,7 +427,7 @@ internal object SmbMessages {
         createDisposition: SmbCreateDisposition,
         createOptions: UInt,
     ): ByteArray {
-        val normalizedPath = path.trimStart('/', '\\').replace('/', '\\')
+        val normalizedPath = path.trim('/', '\\').replace('/', '\\')
         val nameBytes = normalizedPath.encodeToUtf16LE()
         // CREATE StructureSize is 57 (56 bytes fixed + at least 1 byte variable buffer)
         val bodyFixedSize = 56
@@ -495,7 +495,7 @@ internal object SmbMessages {
     }
 
     fun buildCloseRequest(
-        messageId: ULong,
+        messageId: ULong = 0uL,
         sessionId: ULong,
         treeId: UInt,
         fileId: SmbFileId,
@@ -519,7 +519,7 @@ internal object SmbMessages {
     }
 
     fun buildFlushRequest(
-        messageId: ULong,
+        messageId: ULong = 0uL,
         sessionId: ULong,
         treeId: UInt,
         fileId: SmbFileId,
@@ -547,7 +547,7 @@ internal object SmbMessages {
     // =========================================================================
 
     fun buildQueryDirectoryRequest(
-        messageId: ULong,
+        messageId: ULong = 0uL,
         sessionId: ULong,
         treeId: UInt,
         fileId: SmbFileId,
@@ -655,7 +655,7 @@ internal object SmbMessages {
     // =========================================================================
 
     fun buildReadRequest(
-        messageId: ULong,
+        messageId: ULong = 0uL,
         sessionId: ULong,
         treeId: UInt,
         fileId: SmbFileId,
@@ -709,8 +709,43 @@ internal object SmbMessages {
         return packet.copyOfRange(dataOffset, dataOffset + dataLength)
     }
 
+    /**
+     * READ レスポンスのペイロードを呼び出し元の [destination] 配列へ直接コピーする（中間配列を生成しないゼロコピー版）。
+     *
+     * @return 実際にコピーされたバイト数（EOF の場合は `0`）
+     */
+    fun parseReadResponseInto(
+        packet: ByteArray,
+        destination: ByteArray,
+        destinationOffset: Int,
+        maxLength: Int,
+    ): Int {
+        val header = SmbHeader.decode(packet)
+        if (header.status == NtStatus.STATUS_END_OF_FILE) {
+            return 0
+        }
+        if (header.status != NtStatus.STATUS_SUCCESS) {
+            throw SmbException(header.status, "READ failed with ${NtStatus.nameOf(header.status)}")
+        }
+        requireBodySize(packet, header, SmbCommand.READ, 16)
+        val bodyOffset = SmbHeader.SIZE
+        val dataOffset = packet[bodyOffset + 2].toInt() and 0xFF
+        val dataLength = packet.readUIntLE(bodyOffset + 4).toInt()
+        if (dataLength <= 0 || dataOffset + dataLength > packet.size) {
+            return 0
+        }
+        val toCopy = minOf(dataLength, maxLength)
+        packet.copyInto(
+            destination = destination,
+            destinationOffset = destinationOffset,
+            startIndex = dataOffset,
+            endIndex = dataOffset + toCopy,
+        )
+        return toCopy
+    }
+
     fun buildWriteRequest(
-        messageId: ULong,
+        messageId: ULong = 0uL,
         sessionId: ULong,
         treeId: UInt,
         fileId: SmbFileId,
@@ -765,7 +800,7 @@ internal object SmbMessages {
     // =========================================================================
 
     fun buildLockRequest(
-        messageId: ULong,
+        messageId: ULong = 0uL,
         sessionId: ULong,
         treeId: UInt,
         fileId: SmbFileId,
@@ -809,7 +844,7 @@ internal object SmbMessages {
     // =========================================================================
 
     fun buildSetInfoRequest(
-        messageId: ULong,
+        messageId: ULong = 0uL,
         sessionId: ULong,
         treeId: UInt,
         fileId: SmbFileId,
@@ -875,7 +910,7 @@ internal object SmbMessages {
     // =========================================================================
 
     fun buildIoctlRequest(
-        messageId: ULong,
+        messageId: ULong = 0uL,
         sessionId: ULong,
         treeId: UInt,
         fileId: SmbFileId,
@@ -930,5 +965,85 @@ internal object SmbMessages {
             return ByteArray(0)
         }
         return packet.copyOfRange(outputOffset, outputOffset + outputCount)
+    }
+
+    // =========================================================================
+    // 10. Compounded Related Requests (MS-SMB2 3.2.4.1.4)
+    // =========================================================================
+
+    /**
+     * 複数の関連する SMB2 リクエスト (`[CREATE, CLOSE]` など) を 8 バイト境界でアライン・連結し、
+     * 2番目以降に `SMB2_FLAGS_RELATED_OPERATIONS` と各 `NextCommand` オフセットを設定した単一パケットを構築する。
+     */
+    fun buildCompoundRelatedPacket(
+        requests: List<ByteArray>,
+        signEach: ((ByteArray) -> Unit)? = null,
+    ): ByteArray {
+        require(requests.isNotEmpty()) { "Compound requests list must not be empty" }
+        if (requests.size == 1) {
+            val single = requests[0].copyOf()
+            signEach?.invoke(single)
+            return single
+        }
+
+        val alignedSlices = requests.mapIndexed { index, raw ->
+            val isLast = index == requests.lastIndex
+            val paddedLen = if (isLast) raw.size else (raw.size + 7) and -8
+            val slice = ByteArray(paddedLen)
+            raw.copyInto(slice, 0)
+
+            if (index > 0) {
+                val flags = slice.readUIntLE(16)
+                slice.writeUIntLE(16, flags or SmbHeader.SMB2_FLAGS_RELATED_OPERATIONS)
+                if ((flags and SmbHeader.SMB2_FLAGS_SERVER_TO_REDIR) == 0u) {
+                    slice.writeUIntLE(36, 0xFFFFFFFFu) // Related operation TreeId (MS-SMB2 3.2.4.1.4)
+                    slice.writeULongLE(40, 0xFFFFFFFFFFFFFFFFuL) // Related operation SessionId (MS-SMB2 3.2.4.1.4)
+                }
+            }
+            if (!isLast) {
+                slice.writeUIntLE(20, paddedLen.toUInt()) // NextCommand offset
+            } else {
+                slice.writeUIntLE(20, 0u)
+            }
+            signEach?.invoke(slice)
+            slice
+        }
+
+        val totalSize = alignedSlices.sumOf { it.size }
+        val compound = ByteArray(totalSize)
+        var pos = 0
+        for (slice in alignedSlices) {
+            slice.copyInto(compound, pos)
+            pos += slice.size
+        }
+        return compound
+    }
+
+    /**
+     * 受信した SMB2 パケットに複数の Compound レスポンスが含まれている場合、`NextCommand` オフセットに沿って個別のレスポンス配列へ分割する。
+     * 署名検証で送信時のヘッダ値を維持できるよう、各分割済みスライスのヘッダフィールドはそのまま保持される。
+     */
+    fun splitCompoundPacket(packet: ByteArray): List<ByteArray> {
+        if (packet.size < SmbHeader.SIZE) return listOf(packet)
+        val firstNext = packet.readUIntLE(20).toInt()
+        if (firstNext <= 0 || firstNext >= packet.size) {
+            return listOf(packet)
+        }
+
+        val results = mutableListOf<ByteArray>()
+        var offset = 0
+        while (offset + SmbHeader.SIZE <= packet.size) {
+            val nextCmd = packet.readUIntLE(offset + 20).toInt()
+            val end = if (nextCmd > 0 && offset + nextCmd <= packet.size) {
+                offset + nextCmd
+            } else {
+                packet.size
+            }
+            val single = packet.copyOfRange(offset, end)
+            results.add(single)
+            if (nextCmd <= 0 || offset + nextCmd >= packet.size) break
+            offset += nextCmd
+        }
+        return results
     }
 }

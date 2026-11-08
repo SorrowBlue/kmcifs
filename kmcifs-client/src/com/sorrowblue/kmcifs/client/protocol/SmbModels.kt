@@ -6,7 +6,15 @@ package com.sorrowblue.kmcifs.client.protocol
 data class SmbFileId(
     val persistent: ULong,
     val volatile: ULong,
-)
+) {
+    companion object {
+        /** Compounded Related リクエストで直前の CREATE 結果を引き継ぐためのセンチネル FileId (`-1, -1`)。 */
+        val COMPOUND_RELATED = SmbFileId(
+            persistent = 0xFFFF_FFFF_FFFF_FFFFuL,
+            volatile = 0xFFFF_FFFF_FFFF_FFFFuL,
+        )
+    }
+}
 
 /**
  * ファイル属性フラグ定数 (MS-FSCC 2.6)。
