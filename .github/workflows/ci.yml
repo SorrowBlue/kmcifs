@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7.0.1
 
       - name: Verify actions.lock
         env:
@@ -59,7 +59,7 @@ jobs:
               ./kotlin build -m macosApp
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7.0.1
 
       - name: Set up Kotlin Toolchain
         uses: $/.github/actions/setup-kotlin
@@ -78,7 +78,7 @@ jobs:
     environment: snapshot
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4.4.0
+        uses: actions/checkout@v7.0.1
 
       - name: Set up Kotlin Toolchain
         id: kotlin
