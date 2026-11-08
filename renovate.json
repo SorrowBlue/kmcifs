@@ -13,8 +13,12 @@
       "matchDatasources": [
         "maven"
       ],
+      "matchPackageNames": [
+        "androidx.**",
+        "com.android.**",
+        "com.google.android.**"
+      ],
       "registryUrls": [
-        "https://repo.maven.apache.org/maven2/",
         "https://dl.google.com/dl/android/maven2/"
       ]
     },
