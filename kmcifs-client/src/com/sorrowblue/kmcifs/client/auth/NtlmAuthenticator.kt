@@ -108,6 +108,7 @@ internal object NtlmAuthenticator {
         val ntlmOffset = findNtlmsspOffset(securityBlob)
             ?: throw IllegalArgumentException("NTLMSSP signature not found in challenge security blob")
         val type2 = securityBlob.copyOfRange(ntlmOffset, securityBlob.size)
+        require(type2.size >= 32) { "Truncated NTLMSSP Type 2 challenge message: ${type2.size} bytes" }
 
         val msgType = type2.readUIntLE(8)
         require(msgType == 2u) { "Expected NTLMSSP Type 2 message, but got type $msgType" }
