@@ -10,12 +10,8 @@ on:
       - "plugins/dokka/**"
       - "kotlin"
       - "kotlin.bat"
-      - "project.yaml"
       - "libs.versions.toml"
-      - "kmcifs-client/module.yaml"
-      - ".github/actions/setup-kotlin/**"
       - ".github/workflows/docs.yml"
-      - ".github/workflows/actions.lock"
   pull_request:
     branches:
       - main
@@ -25,15 +21,8 @@ on:
       - "plugins/dokka/**"
       - "kotlin"
       - "kotlin.bat"
-      - "project.yaml"
       - "libs.versions.toml"
-      - "kmcifs-client/module.yaml"
-      - ".github/actions/setup-kotlin/**"
       - ".github/workflows/docs.yml"
-      - ".github/workflows/actions.lock"
-  release:
-    types:
-      - published
   workflow_dispatch:
 
 permissions:
@@ -53,11 +42,13 @@ jobs:
       deploy: ${{ steps.decide.outputs.deploy }}
     steps:
       - name: Checkout repository
-        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        if: github.event_name != 'workflow_dispatch'
         uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 2
 
       - name: Filter changed paths
-        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        if: github.event_name != 'workflow_dispatch'
         id: filter
         uses: dorny/paths-filter@v4.0.3
         with:
@@ -66,28 +57,26 @@ jobs:
               - 'docs/**'
               - 'zensical.toml'
               - '.github/workflows/docs.yml'
-              - '.github/workflows/actions.lock'
             dokka:
               - 'plugins/dokka/**'
               - 'kotlin'
               - 'kotlin.bat'
-              - 'project.yaml'
-              - 'libs.versions.toml'
-              - 'kmcifs-client/module.yaml'
-              - '.github/actions/setup-kotlin/**'
               - '.github/workflows/docs.yml'
-              - '.github/workflows/actions.lock'
 
       - name: Determine jobs to run
         id: decide
         run: |
-          if [ "${{ github.event_name }}" = "release" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "zensical=true" >> "$GITHUB_OUTPUT"
             echo "dokka=true" >> "$GITHUB_OUTPUT"
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           else
+            DOKKA="${{ steps.filter.outputs.dokka }}"
+            if [ "$DOKKA" != "true" ] && git diff HEAD^1 HEAD -- libs.versions.toml | grep -qE '^[+-][^+-].*dokka'; then
+              DOKKA="true"
+            fi
             echo "zensical=${{ steps.filter.outputs.zensical }}" >> "$GITHUB_OUTPUT"
-            echo "dokka=${{ steps.filter.outputs.dokka }}" >> "$GITHUB_OUTPUT"
+            echo "dokka=${DOKKA}" >> "$GITHUB_OUTPUT"
             echo "deploy=false" >> "$GITHUB_OUTPUT"
           fi
 
