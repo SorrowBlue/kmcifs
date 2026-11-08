@@ -27,6 +27,12 @@
         "github-actions"
       ],
       "groupName": "github-actions"
+    },
+    {
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "automerge": true
     }
   ]
 }
