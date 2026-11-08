@@ -12,8 +12,8 @@ product:
 
 dependencies:
   - //kmcifs-client: exported
-  - org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0: exported
-  - io.ktor:ktor-network:3.4.0: exported
+  - $libs.kotlinx.coroutines.core: exported
+  - $libs.ktor.network: exported
 
 settings:
   android:

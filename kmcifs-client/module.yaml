@@ -13,12 +13,12 @@ product:
     - mingwX64
 
 dependencies:
-  - org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0
-  - org.jetbrains.kotlinx:kotlinx-io-core:0.9.2: exported
-  - io.ktor:ktor-network:3.4.0
+  - $libs.kotlinx.coroutines.core
+  - $libs.kotlinx.io.core: exported
+  - $libs.ktor.network
 
 test-dependencies:
-  - org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0
+  - $libs.kotlinx.coroutines.test
 
 settings:
   kotlin:
