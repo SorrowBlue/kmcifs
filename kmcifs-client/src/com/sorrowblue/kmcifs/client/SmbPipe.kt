@@ -1,8 +1,10 @@
 package com.sorrowblue.kmcifs.client
 
+import com.sorrowblue.kmcifs.client.protocol.NtStatus
 import com.sorrowblue.kmcifs.client.protocol.SmbAccessMask
 import com.sorrowblue.kmcifs.client.protocol.SmbCreateDisposition
 import com.sorrowblue.kmcifs.client.protocol.SmbCreateOptions
+import com.sorrowblue.kmcifs.client.protocol.SmbException
 import com.sorrowblue.kmcifs.client.protocol.SmbFileAttributes
 import com.sorrowblue.kmcifs.client.protocol.SmbFileId
 import com.sorrowblue.kmcifs.client.protocol.SmbMessages
@@ -21,11 +23,20 @@ class SmbPipeShare internal constructor(
     @kotlin.concurrent.Volatile
     private var disconnected = false
 
+    val isClosed: Boolean
+        get() = disconnected || client.isClosed
+
     /**
      * 指定した名前のパイプ（例: `"srvsvc"`, `"wkssvc"`）を開く。
      */
     suspend fun openPipe(pipeName: String): SmbNamedPipe {
-        val cleanName = pipeName.removePrefix("\\pipe\\").removePrefix("pipe\\").trimStart('/', '\\')
+        if (disconnected) {
+            throw SmbException(NtStatus.STATUS_NETWORK_NAME_DELETED, "SMB IPC$ share is already disconnected")
+        }
+        val cleanName = pipeName.replace('/', '\\').trimStart('\\').let {
+            if (it.startsWith("pipe\\", ignoreCase = true)) it.substring(5) else it
+        }.trimStart('\\')
+        require(cleanName.isNotEmpty()) { "pipeName must not be blank" }
         val createReq = SmbMessages.buildCreateRequest(
             sessionId = client.sessionId,
             treeId = treeId,
@@ -86,17 +97,29 @@ class SmbNamedPipe internal constructor(
     @kotlin.concurrent.Volatile
     private var closed = false
 
+    val isClosed: Boolean
+        get() = closed
+
+    private fun ensureOpen() {
+        if (closed) {
+            throw SmbException(NtStatus.STATUS_FILE_CLOSED, "SMB named pipe is already closed")
+        }
+    }
+
     /**
      * `FSCTL_PIPE_TRANSCEIVE` (`SMB2 IOCTL`) を使用して、パイプへの書き込みと応答の読み取りを 1 往復で実行する。
      */
     suspend fun transceive(input: ByteArray, maxOutputLength: Int = 65536): ByteArray {
+        ensureOpen()
+        require(maxOutputLength >= 0) { "maxOutputLength must be non-negative: $maxOutputLength" }
+        val maxOutput = minOf(maxOutputLength, pipeShare.client.maxTransactSize)
         val req = SmbMessages.buildIoctlRequest(
             sessionId = pipeShare.client.sessionId,
             treeId = pipeShare.treeId,
             fileId = fileId,
             ctlCode = SmbMessages.FSCTL_PIPE_TRANSCEIVE,
             inputData = input,
-            maxOutputResponse = maxOutputLength,
+            maxOutputResponse = maxOutput,
         )
         val resp = pipeShare.client.executeCommand(req, pipeShare.encryptShare)
         return SmbMessages.parseIoctlResponse(resp)
@@ -106,30 +129,48 @@ class SmbNamedPipe internal constructor(
      * パイプへデータを書き込む (`SMB2 WRITE`)。
      */
     suspend fun write(data: ByteArray): Int {
-        val req = SmbMessages.buildWriteRequest(
-            sessionId = pipeShare.client.sessionId,
-            treeId = pipeShare.treeId,
-            fileId = fileId,
-            offset = 0L,
-            data = data,
-        )
-        val resp = pipeShare.client.executeCommand(req, pipeShare.encryptShare)
-        return SmbMessages.parseWriteResponse(resp)
+        ensureOpen()
+        if (data.isEmpty()) return 0
+        val maxChunk = pipeShare.client.maxWriteSize.coerceAtMost(262144)
+        var totalWritten = 0
+        while (totalWritten < data.size) {
+            val chunkLen = minOf(maxChunk, data.size - totalWritten)
+            val req = SmbMessages.buildWriteRequest(
+                sessionId = pipeShare.client.sessionId,
+                treeId = pipeShare.treeId,
+                fileId = fileId,
+                offset = 0L,
+                data = data,
+                startIndex = totalWritten,
+                length = chunkLen,
+            )
+            val resp = pipeShare.client.executeCommand(req, pipeShare.encryptShare)
+            val written = SmbMessages.parseWriteResponse(resp)
+            if (written <= 0) break
+            val actualWritten = minOf(written, chunkLen)
+            totalWritten += actualWritten
+            if (actualWritten < chunkLen) break
+        }
+        return totalWritten
     }
 
     /**
      * パイプからデータを読み取る (`SMB2 READ`)。
      */
     suspend fun read(maxLength: Int = 4280): ByteArray {
+        ensureOpen()
+        require(maxLength >= 0) { "maxLength must be non-negative: $maxLength" }
+        if (maxLength == 0) return ByteArray(0)
+        val readLen = minOf(maxLength, pipeShare.client.maxReadSize)
         val req = SmbMessages.buildReadRequest(
             sessionId = pipeShare.client.sessionId,
             treeId = pipeShare.treeId,
             fileId = fileId,
             offset = 0L,
-            length = maxLength,
+            length = readLen,
         )
         val resp = pipeShare.client.executeCommand(req, pipeShare.encryptShare)
-        return SmbMessages.parseReadResponse(resp)
+        return SmbMessages.parseReadResponse(resp, readLen)
     }
 
     suspend fun closeSuspend() {

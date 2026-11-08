@@ -1,5 +1,7 @@
 package com.sorrowblue.kmcifs.client
 
+import com.sorrowblue.kmcifs.client.protocol.NtStatus
+import com.sorrowblue.kmcifs.client.protocol.SmbException
 import com.sorrowblue.kmcifs.client.protocol.SmbFileId
 import com.sorrowblue.kmcifs.client.protocol.SmbFileMetadata
 import com.sorrowblue.kmcifs.client.protocol.SmbMessages
@@ -23,7 +25,11 @@ class SmbFile internal constructor(
     initialMetadata: SmbFileMetadata,
 ) : AutoCloseable {
 
+    @kotlin.concurrent.Volatile
     private var closed = false
+
+    val isClosed: Boolean
+        get() = closed
 
     var metadata: SmbFileMetadata = initialMetadata
         private set
@@ -31,11 +37,18 @@ class SmbFile internal constructor(
     val size: Long
         get() = metadata.size
 
+    private fun ensureOpen() {
+        if (closed) {
+            throw SmbException(NtStatus.STATUS_FILE_CLOSED, "SMB file handle is already closed")
+        }
+    }
+
     /**
      * 指定したオフセットから最大 [length] バイトを読み取る。
      * サーバーの `MaxReadSize` を超える長さも自動的にチャンク分割して読み取る。
      */
     suspend fun read(offset: Long, length: Int): ByteArray {
+        ensureOpen()
         require(offset >= 0L) { "offset must be non-negative" }
         require(length >= 0) { "length must be non-negative" }
         if (length == 0) return ByteArray(0)
@@ -60,8 +73,9 @@ class SmbFile internal constructor(
         destinationOffset: Int = 0,
         length: Int = destination.size - destinationOffset,
     ): Int {
+        ensureOpen()
         require(offset >= 0L) { "offset must be non-negative" }
-        require(destinationOffset >= 0 && length >= 0 && destinationOffset + length <= destination.size) {
+        require(destinationOffset >= 0 && length >= 0 && length <= destination.size - destinationOffset) {
             "Invalid destination slice bounds"
         }
         if (length == 0) return 0
@@ -84,6 +98,7 @@ class SmbFile internal constructor(
     }
 
     private suspend fun readSingleChunk(offset: Long, length: Int): ByteArray {
+        ensureOpen()
         val req = SmbMessages.buildReadRequest(
             sessionId = share.client.sessionId,
             treeId = share.treeId,
@@ -92,7 +107,7 @@ class SmbFile internal constructor(
             length = length,
         )
         val resp = share.client.executeCommand(req, share.encryptShare)
-        return SmbMessages.parseReadResponse(resp)
+        return SmbMessages.parseReadResponse(resp, length)
     }
 
     private suspend fun readSingleChunkInto(
@@ -101,6 +116,7 @@ class SmbFile internal constructor(
         destinationOffset: Int,
         length: Int,
     ): Int {
+        ensureOpen()
         val req = SmbMessages.buildReadRequest(
             sessionId = share.client.sessionId,
             treeId = share.treeId,
@@ -116,6 +132,7 @@ class SmbFile internal constructor(
      * ファイル先頭から末尾まで全バイトを読み取る。
      */
     suspend fun readAll(): ByteArray {
+        ensureOpen()
         if (size <= 0L) {
             return read(0L, 65536)
         }
@@ -135,11 +152,12 @@ class SmbFile internal constructor(
         startIndex: Int = 0,
         length: Int = data.size - startIndex,
     ): Int {
+        ensureOpen()
         require(offset >= 0L) { "offset must be non-negative" }
-        require(startIndex >= 0 && length >= 0 && startIndex + length <= data.size) { "Invalid data slice bounds" }
+        require(startIndex >= 0 && length >= 0 && length <= data.size - startIndex) { "Invalid data slice bounds" }
         if (length == 0) return 0
 
-        val maxChunk = share.client.maxWriteSize.coerceAtMost(65536)
+        val maxChunk = share.client.maxWriteSize.coerceAtMost(262144)
         var totalWritten = 0
         while (totalWritten < length) {
             val chunkLen = minOf(maxChunk, length - totalWritten)
@@ -154,8 +172,10 @@ class SmbFile internal constructor(
             )
             val resp = share.client.executeCommand(req, share.encryptShare)
             val written = SmbMessages.parseWriteResponse(resp)
-            totalWritten += written
-            if (written < chunkLen) break
+            if (written <= 0) break
+            val actualWritten = minOf(written, chunkLen)
+            totalWritten += actualWritten
+            if (actualWritten < chunkLen) break
         }
 
         val endPos = offset + totalWritten
@@ -179,6 +199,7 @@ class SmbFile internal constructor(
         exclusive: Boolean = true,
         failImmediately: Boolean = true,
     ) {
+        ensureOpen()
         var flags = if (exclusive) {
             SmbMessages.SMB2_LOCKFLAG_EXCLUSIVE_LOCK
         } else {
@@ -203,6 +224,7 @@ class SmbFile internal constructor(
      * [lock] で取得した指定バイト範囲のロックを解除する (`SMB2 LOCK` with `SMB2_LOCKFLAG_UNLOCK`)。
      */
     suspend fun unlock(offset: Long = 0L, length: Long = Long.MAX_VALUE) {
+        ensureOpen()
         val req = SmbMessages.buildLockRequest(
             sessionId = share.client.sessionId,
             treeId = share.treeId,
@@ -219,6 +241,7 @@ class SmbFile internal constructor(
      * ファイルサイズを変更（トランケートまたは拡張）する (`FileEndOfFileInformation`)。
      */
     suspend fun setLength(newSize: Long) {
+        ensureOpen()
         require(newSize >= 0L) { "newSize must be non-negative" }
         val req = SmbMessages.buildSetInfoRequest(
             sessionId = share.client.sessionId,
@@ -236,6 +259,7 @@ class SmbFile internal constructor(
      * サーバー側の書き込みバッファをストレージにフラッシュする (`SMB2 FLUSH`)。
      */
     suspend fun flush() {
+        ensureOpen()
         val req = SmbMessages.buildFlushRequest(
             sessionId = share.client.sessionId,
             treeId = share.treeId,

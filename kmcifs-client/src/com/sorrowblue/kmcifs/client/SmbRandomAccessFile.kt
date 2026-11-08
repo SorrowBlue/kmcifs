@@ -143,35 +143,7 @@ class SmbRandomAccessFile(
     suspend fun open(): SmbRandomAccessFile {
         check(!closed) { "SmbRandomAccessFile is already closed" }
         if (smbFile != null) return this
-
-        val desiredAccess = if (mode.writable) {
-            SmbAccessMask.WRITE_DEFAULT
-        } else {
-            SmbAccessMask.READ_DEFAULT
-        }
-        val shareAccess = if (mode.writable) {
-            SmbShareAccess.FILE_SHARE_READ or SmbShareAccess.FILE_SHARE_WRITE
-        } else {
-            SmbShareAccess.ALL
-        }
-        val createDisposition = if (mode.writable) {
-            SmbCreateDisposition.FILE_OPEN_IF
-        } else {
-            SmbCreateDisposition.FILE_OPEN
-        }
-        var createOptions = SmbCreateOptions.FILE_NON_DIRECTORY_FILE or SmbCreateOptions.FILE_SYNCHRONOUS_IO_NONALERT
-        if (mode.writeThrough) {
-            createOptions = createOptions or SmbCreateOptions.FILE_WRITE_THROUGH
-        }
-
-        smbFile = share.openFile(
-            path = path,
-            desiredAccess = desiredAccess,
-            shareAccess = shareAccess,
-            createDisposition = createDisposition,
-            fileAttributes = SmbFileAttributes.NORMAL,
-            createOptions = createOptions,
-        )
+        ensureOpenLocked()
         invalidateBuffer()
         return this
     }
@@ -282,7 +254,7 @@ class SmbRandomAccessFile(
      * ファイル末尾に達しているため 1 バイトも読み取れなかった場合は `-1` を返す。
      */
     fun read(b: ByteArray, off: Int, len: Int): Int {
-        require(off >= 0 && len >= 0 && off + len <= b.size) {
+        require(off >= 0 && len >= 0 && len <= b.size - off) {
             "Invalid buffer bounds: off=$off, len=$len, size=${b.size}"
         }
         check(!closed) { "SmbRandomAccessFile is closed" }
@@ -395,7 +367,7 @@ class SmbRandomAccessFile(
      * [len] バイト読み切る前にファイル末尾へ達した場合は [SmbEndOfFileException] を送出する。
      */
     fun readFully(b: ByteArray, off: Int = 0, len: Int = b.size - off) {
-        require(off >= 0 && len >= 0 && off + len <= b.size) {
+        require(off >= 0 && len >= 0 && len <= b.size - off) {
             "Invalid buffer bounds: off=$off, len=$len, size=${b.size}"
         }
         var total = 0
@@ -482,7 +454,7 @@ class SmbRandomAccessFile(
      */
     fun write(b: ByteArray, off: Int, len: Int): Int = runBlocking {
         check(mode.writable) { "File \"$path\" is opened in read-only mode (${mode.modeString})" }
-        require(off >= 0 && len >= 0 && off + len <= b.size) {
+        require(off >= 0 && len >= 0 && len <= b.size - off) {
             "Invalid buffer bounds: off=$off, len=$len, size=${b.size}"
         }
         val file = ensureOpenLocked()
@@ -587,9 +559,7 @@ class SmbRandomAccessFile(
 
     private fun requireOpenFile(): SmbFile {
         check(!closed) { "SmbRandomAccessFile is closed" }
-        return smbFile ?: throw IllegalStateException(
-            "SmbRandomAccessFile for \"$path\" is not open. Call open() or share.openRandomAccessFile() first.",
-        )
+        return smbFile ?: runBlocking { ensureOpenLocked() }
     }
 
     private suspend fun ensureOpenLocked(): SmbFile {

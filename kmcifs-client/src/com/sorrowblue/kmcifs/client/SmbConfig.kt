@@ -53,7 +53,7 @@ data class SmbConfig(
     val encryptionPolicy: SmbEncryptionPolicy = SmbEncryptionPolicy.NEGOTIATE,
     val preferEncryption: Boolean = false,
     val alwaysSign: Boolean = false,
-    val verifyServerSignatures: Boolean = false,
+    val verifyServerSignatures: Boolean = true,
     val queryDirectoryBufferSize: Int = 64 * 1024,
     val randomAccessBufferSize: Int = SmbRandomAccessFile.DEFAULT_BUFFER_SIZE,
     val connectTimeoutMillis: Long = 10_000L,

@@ -9,6 +9,7 @@ import com.sorrowblue.kmcifs.client.protocol.SmbException
 import com.sorrowblue.kmcifs.client.protocol.SmbFileAttributes
 import com.sorrowblue.kmcifs.client.protocol.SmbFileId
 import com.sorrowblue.kmcifs.client.protocol.SmbFileMetadata
+import com.sorrowblue.kmcifs.client.protocol.SmbHeader
 import com.sorrowblue.kmcifs.client.protocol.SmbMessages
 import com.sorrowblue.kmcifs.client.protocol.SmbShareAccess
 import kotlinx.coroutines.runBlocking
@@ -25,7 +26,17 @@ class SmbShare internal constructor(
     val encryptShare: Boolean,
 ) : AutoCloseable {
 
+    @kotlin.concurrent.Volatile
     private var disconnected = false
+
+    val isClosed: Boolean
+        get() = disconnected || client.isClosed
+
+    private fun ensureConnected() {
+        if (disconnected) {
+            throw SmbException(NtStatus.STATUS_NETWORK_NAME_DELETED, "SMB share is already disconnected")
+        }
+    }
 
     /**
      * 指定したディレクトリ内のファイル・サブディレクトリ一覧を取得する。
@@ -39,6 +50,7 @@ class SmbShare internal constructor(
         pattern: String = "*",
         bufferSize: Int = client.config.queryDirectoryBufferSize,
     ): List<SmbDirectoryEntry> {
+        ensureConnected()
         require(bufferSize > 0) { "bufferSize must be positive: $bufferSize" }
         val queryBufLen = minOf(client.maxTransactSize, bufferSize)
 
@@ -94,6 +106,7 @@ class SmbShare internal constructor(
      * 指定したパスのファイルまたはディレクトリのメタデータ情報を取得する。
      */
     suspend fun stat(path: String): SmbFileMetadata {
+        ensureConnected()
         val createReq = SmbMessages.buildCreateRequest(
             sessionId = client.sessionId,
             treeId = treeId,
@@ -147,6 +160,7 @@ class SmbShare internal constructor(
         fileAttributes: UInt = SmbFileAttributes.NORMAL,
         createOptions: UInt = SmbCreateOptions.FILE_NON_DIRECTORY_FILE or SmbCreateOptions.FILE_SYNCHRONOUS_IO_NONALERT,
     ): SmbFile {
+        ensureConnected()
         val createReq = SmbMessages.buildCreateRequest(
             sessionId = client.sessionId,
             treeId = treeId,
@@ -312,6 +326,7 @@ class SmbShare internal constructor(
      * 新しいディレクトリを作成する。
      */
     suspend fun createDirectory(path: String) {
+        ensureConnected()
         val createReq = SmbMessages.buildCreateRequest(
             sessionId = client.sessionId,
             treeId = treeId,
@@ -322,8 +337,14 @@ class SmbShare internal constructor(
             createDisposition = SmbCreateDisposition.FILE_CREATE,
             createOptions = SmbCreateOptions.FILE_DIRECTORY_FILE or SmbCreateOptions.FILE_SYNCHRONOUS_IO_NONALERT,
         )
-        val createResp = SmbMessages.parseCreateResponse(client.executeCommand(createReq, encryptShare))
-        closeFileId(createResp.fileId)
+        val closeReq = SmbMessages.buildCloseRequest(
+            sessionId = client.sessionId,
+            treeId = treeId,
+            fileId = SmbFileId.COMPOUND_RELATED,
+        )
+        val responses = client.executeCompoundCommands(listOf(createReq, closeReq), encryptShare)
+        SmbMessages.parseCreateResponse(responses[0])
+        SmbMessages.parseSimpleSuccessResponse(responses[1], "CLOSE")
     }
 
     /**
@@ -376,6 +397,7 @@ class SmbShare internal constructor(
     }
 
     private suspend fun deleteEntry(path: String, isDirectory: Boolean) {
+        ensureConnected()
         val dirFlag = if (isDirectory) SmbCreateOptions.FILE_DIRECTORY_FILE else SmbCreateOptions.FILE_NON_DIRECTORY_FILE
         val createReq = SmbMessages.buildCreateRequest(
             sessionId = client.sessionId,
@@ -387,26 +409,36 @@ class SmbShare internal constructor(
             createDisposition = SmbCreateDisposition.FILE_OPEN,
             createOptions = dirFlag or SmbCreateOptions.FILE_SYNCHRONOUS_IO_NONALERT,
         )
-        val createResp = SmbMessages.parseCreateResponse(client.executeCommand(createReq, encryptShare))
+        val setInfoReq = SmbMessages.buildSetInfoRequest(
+            sessionId = client.sessionId,
+            treeId = treeId,
+            fileId = SmbFileId.COMPOUND_RELATED,
+            fileInfoClass = 13u, // FileDispositionInformation
+            infoBuffer = SmbMessages.buildFileDispositionPayload(deletePending = true),
+        )
+        val closeReq = SmbMessages.buildCloseRequest(
+            sessionId = client.sessionId,
+            treeId = treeId,
+            fileId = SmbFileId.COMPOUND_RELATED,
+        )
+        val responses = client.executeCompoundCommands(listOf(createReq, setInfoReq, closeReq), encryptShare)
+        val createResp = SmbMessages.parseCreateResponse(responses[0])
         try {
-            val setInfoReq = SmbMessages.buildSetInfoRequest(
-                sessionId = client.sessionId,
-                treeId = treeId,
-                fileId = createResp.fileId,
-                fileInfoClass = 13u, // FileDispositionInformation
-                infoBuffer = SmbMessages.buildFileDispositionPayload(deletePending = true),
-            )
-            val setInfoResp = client.executeCommand(setInfoReq, encryptShare)
-            SmbMessages.parseSimpleSuccessResponse(setInfoResp, "SET_INFO (Delete)")
-        } finally {
-            closeFileId(createResp.fileId)
+            SmbMessages.parseSimpleSuccessResponse(responses[1], "SET_INFO (Delete)")
+        } catch (e: Throwable) {
+            if (SmbHeader.decode(responses[2]).status != NtStatus.STATUS_SUCCESS) {
+                runCatching { closeFileId(createResp.fileId) }
+            }
+            throw e
         }
+        SmbMessages.parseSimpleSuccessResponse(responses[2], "CLOSE")
     }
 
     /**
      * ファイルまたはディレクトリの名前変更・移動を行う。
      */
     suspend fun rename(fromPath: String, toPath: String, replaceIfExists: Boolean = true) {
+        ensureConnected()
         val createReq = SmbMessages.buildCreateRequest(
             sessionId = client.sessionId,
             treeId = treeId,
@@ -417,20 +449,29 @@ class SmbShare internal constructor(
             createDisposition = SmbCreateDisposition.FILE_OPEN,
             createOptions = SmbCreateOptions.FILE_SYNCHRONOUS_IO_NONALERT,
         )
-        val createResp = SmbMessages.parseCreateResponse(client.executeCommand(createReq, encryptShare))
+        val setInfoReq = SmbMessages.buildSetInfoRequest(
+            sessionId = client.sessionId,
+            treeId = treeId,
+            fileId = SmbFileId.COMPOUND_RELATED,
+            fileInfoClass = 10u, // FileRenameInformation
+            infoBuffer = SmbMessages.buildFileRenamePayload(toPath, replaceIfExists),
+        )
+        val closeReq = SmbMessages.buildCloseRequest(
+            sessionId = client.sessionId,
+            treeId = treeId,
+            fileId = SmbFileId.COMPOUND_RELATED,
+        )
+        val responses = client.executeCompoundCommands(listOf(createReq, setInfoReq, closeReq), encryptShare)
+        val createResp = SmbMessages.parseCreateResponse(responses[0])
         try {
-            val setInfoReq = SmbMessages.buildSetInfoRequest(
-                sessionId = client.sessionId,
-                treeId = treeId,
-                fileId = createResp.fileId,
-                fileInfoClass = 10u, // FileRenameInformation
-                infoBuffer = SmbMessages.buildFileRenamePayload(toPath, replaceIfExists),
-            )
-            val setInfoResp = client.executeCommand(setInfoReq, encryptShare)
-            SmbMessages.parseSimpleSuccessResponse(setInfoResp, "SET_INFO (Rename)")
-        } finally {
-            closeFileId(createResp.fileId)
+            SmbMessages.parseSimpleSuccessResponse(responses[1], "SET_INFO (Rename)")
+        } catch (e: Throwable) {
+            if (SmbHeader.decode(responses[2]).status != NtStatus.STATUS_SUCCESS) {
+                runCatching { closeFileId(createResp.fileId) }
+            }
+            throw e
         }
+        SmbMessages.parseSimpleSuccessResponse(responses[2], "CLOSE")
     }
 
     internal suspend fun closeFileId(fileId: com.sorrowblue.kmcifs.client.protocol.SmbFileId) {
