@@ -13,22 +13,22 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * Android Keystore の AES-256-GCM 秘密鍵を用いて SMB 接続情報を暗号化し、
- * デバイス内の SharedPreferences へ保存・復元するクラス。
+ * Encrypts and persists [SmbSavedConnection] settings in `SharedPreferences` using an AES-256-GCM
+ * secret key backed by the Android Keystore.
  */
 class EncryptedConnectionStore(context: Context) {
 
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     /**
-     * 保存済みの暗号化された接続情報が存在するかどうかを返す。
+     * Returns whether encrypted connection settings are currently saved on the device.
      */
     fun hasSavedConnection(): Boolean {
         return prefs.contains(KEY_CIPHERTEXT) && prefs.contains(KEY_IV)
     }
 
     /**
-     * 接続情報を Android Keystore の秘密鍵で AES-GCM 暗号化してデバイスに保存する。
+     * Encrypts [connection] with the Android Keystore AES-GCM secret key and saves it to the device.
      */
     fun save(connection: SmbSavedConnection) {
         val secretKey = getOrCreateSecretKey()
@@ -47,8 +47,8 @@ class EncryptedConnectionStore(context: Context) {
     }
 
     /**
-     * デバイスに保存されている暗号化データを復号し、接続情報を返す。
-     * 未保存または復号失敗時は `null` を返す。
+     * Decrypts and returns the saved connection settings from the device, or `null` if none are saved
+     * or decryption fails.
      */
     fun load(): SmbSavedConnection? {
         val ivBase64 = prefs.getString(KEY_IV, null) ?: return null
@@ -72,7 +72,7 @@ class EncryptedConnectionStore(context: Context) {
     }
 
     /**
-     * 保存されている接続情報を削除する。
+     * Clears any saved connection settings from the device.
      */
     fun clear() {
         prefs.edit()

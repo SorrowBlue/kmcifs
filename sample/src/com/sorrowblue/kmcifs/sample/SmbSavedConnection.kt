@@ -6,7 +6,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.random.Random
 
 /**
- * サンプルアプリで保存・復元する SMB 接続設定。
+ * SMB connection settings persisted and restored by the sample applications.
  */
 data class SmbSavedConnection(
     val host: String = "192.168.1.100",
@@ -20,10 +20,11 @@ data class SmbSavedConnection(
 )
 
 /**
- * 接続設定のシリアライズと AES-128-GCM による暗号化・復号を担当するオブジェクト。
+ * Serializes and encrypts/decrypts [SmbSavedConnection] instances using AES-128-GCM.
  *
- * 平文の設定データを UTF-8 バイナリへ変換した上で、12 バイトのランダム IV と 16 バイトの認証タグを付与して
- * Base64 文字列へエンコードする。改ざんや鍵の不一致があった場合は復号時に例外を送出する。
+ * Encodes the connection fields into UTF-8 binary format, encrypts the payload with a 12-byte random IV
+ * and a 16-byte authentication tag, and returns a Base64-encoded string. Throws an exception during
+ * decryption if tampering or a key mismatch is detected.
  */
 object SmbCredentialCipher {
 
@@ -155,7 +156,7 @@ object SmbCredentialCipher {
 }
 
 /**
- * 共通コード内で完結する AES-128-GCM 実装。
+ * Self-contained pure Kotlin AES-128-GCM implementation for credential storage in the sample module.
  */
 internal object Aes128Gcm {
 

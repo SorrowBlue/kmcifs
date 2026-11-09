@@ -5,7 +5,7 @@ import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUIntLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeULongLE
 
 /**
- * NTLMv2 認証の鍵導出・チャレンジ応答計算および MIC 生成で使用する MD5 / HMAC-MD5 実装。
+ * MD5 and HMAC-MD5 implementation used for NTLMv2 key derivation, challenge-response calculation, and MIC generation.
  */
 internal object Md5 {
 

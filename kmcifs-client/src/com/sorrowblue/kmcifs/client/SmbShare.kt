@@ -17,7 +17,7 @@ import kotlinx.io.Sink
 import kotlinx.io.Source
 
 /**
- * 接続済みの SMB 共有フォルダ（Tree Connect）に対するファイル・ディレクトリ操作を提供するクラス。
+ * Provides file and directory operations on a connected SMB shared folder (`SMB2 TREE_CONNECT`).
  */
 class SmbShare internal constructor(
     val client: SmbClient,
@@ -39,11 +39,11 @@ class SmbShare internal constructor(
     }
 
     /**
-     * 指定したディレクトリ内のファイル・サブディレクトリ一覧を取得する。
+     * Lists files and subdirectories within the specified directory.
      *
-     * @param path 共有ルートからの相対パス（ルートの場合は `""` または `"/"`）
-     * @param pattern 検索ワイルドカード（デフォルトは `"*"`）
-     * @param bufferSize 1回の `QUERY_DIRECTORY` リクエストで要求する最大バッファサイズ（バイト）
+     * @param path Path relative to the share root (use `""` or `"/"` for the root directory).
+     * @param pattern Search wildcard pattern (defaults to `"*"`).
+     * @param bufferSize Maximum output buffer size in bytes requested per `SMB2 QUERY_DIRECTORY` call.
      */
     suspend fun listDirectory(
         path: String = "",
@@ -103,7 +103,7 @@ class SmbShare internal constructor(
     }
 
     /**
-     * 指定したパスのファイルまたはディレクトリのメタデータ情報を取得する。
+     * Retrieves metadata for the file or directory at the specified [path].
      */
     suspend fun stat(path: String): SmbFileMetadata {
         ensureConnected()
@@ -129,7 +129,7 @@ class SmbShare internal constructor(
     }
 
     /**
-     * 指定したパスにファイルまたはディレクトリが存在するかどうかを判定する。
+     * Returns whether a file or directory exists at the specified [path].
      */
     suspend fun exists(path: String): Boolean {
         return try {
@@ -148,9 +148,10 @@ class SmbShare internal constructor(
     }
 
     /**
-     * ファイルを指定したアクセス権・共有排他モードで開き、[SmbFile] ハンドルを返す。
+     * Opens a file with the specified access mask and sharing mode, returning an [SmbFile] handle.
      *
-     * 他プロセスからのアクセスを完全に拒否する排他ロックで開く場合は、`shareAccess = SmbShareAccess.EXCLUSIVE` を指定する。
+     * Pass `shareAccess = SmbShareAccess.EXCLUSIVE` to open the file with an exclusive share lock
+     * that denies concurrent opens from other processes.
      */
     suspend fun openFile(
         path: String,
@@ -180,9 +181,9 @@ class SmbShare internal constructor(
     }
 
     /**
-     * Java の `RandomAccessFile` に相当する [SmbRandomAccessFile] をオープンして返す。
+     * Opens and returns an [SmbRandomAccessFile] modeled after `java.io.RandomAccessFile`.
      *
-     * [mode] には `"r"`（読み取り専用）、`"rw"`（読み書き）、`"rws"` / `"rwd"`（同期書き込み付き読み書き）を指定できる。
+     * [mode] accepts `"r"` (read-only), `"rw"` (read/write), or `"rws"` / `"rwd"` (synchronous read/write).
      */
     suspend fun openRandomAccessFile(
         path: String,
@@ -198,7 +199,7 @@ class SmbShare internal constructor(
     }
 
     /**
-     * 指定した [SmbRandomAccessMode] で [SmbRandomAccessFile] をオープンして返す。
+     * Opens and returns an [SmbRandomAccessFile] with the specified [SmbRandomAccessMode].
      */
     suspend fun openRandomAccessFile(
         path: String,
@@ -214,8 +215,8 @@ class SmbShare internal constructor(
     }
 
     /**
-     * 指定したパスのファイルを読み取る `kotlinx.io.Source` をオープンして返す。
-     * 返された `Source.close()` を呼ぶと背後の [SmbFile] ハンドルも閉じられる。
+     * Opens and returns a buffered `kotlinx.io.Source` for reading the file at [path].
+     * Closing the returned [Source] also closes the underlying [SmbFile] handle.
      */
     suspend fun openSource(path: String): Source {
         val file = openFile(
@@ -228,11 +229,12 @@ class SmbShare internal constructor(
     }
 
     /**
-     * 指定したパスのファイルへ書き込む `kotlinx.io.Sink` をオープンして返す。
-     * 返された `Sink.close()` を呼ぶとフラッシュのうえ背後の [SmbFile] ハンドルも閉じられる。
+     * Opens and returns a buffered `kotlinx.io.Sink` for writing to the file at [path].
+     * Closing the returned [Sink] flushes pending data and closes the underlying [SmbFile] handle.
      *
-     * @param append `true` の場合は既存ファイルの末尾から追記する
-     * @param overwrite [append] が `false` のとき、`true` なら上書き作成（`FILE_OVERWRITE_IF`）、`false` なら新規作成のみ（`FILE_CREATE`）
+     * @param append If `true`, appends to the end of an existing file (or creates it if absent).
+     * @param overwrite When [append] is `false`, `true` overwrites an existing file (`FILE_OVERWRITE_IF`)
+     *   whereas `false` requires creating a new file (`FILE_CREATE`).
      */
     suspend fun openSink(
         path: String,
@@ -255,7 +257,7 @@ class SmbShare internal constructor(
     }
 
     /**
-     * ファイル全体を読み取ってバイト配列として返す。
+     * Reads the entire contents of a file into a [ByteArray].
      */
     suspend fun readBytes(path: String): ByteArray {
         val file = openFile(
@@ -272,14 +274,15 @@ class SmbShare internal constructor(
     }
 
     /**
-     * ファイル全体を UTF-8 文字列として読み取る。
+     * Reads the entire contents of a file decoded as a UTF-8 [String].
      */
     suspend fun readText(path: String): String = readBytes(path).decodeToString()
 
     /**
-     * ファイルにバイト配列を書き込む。
+     * Writes a [ByteArray] to a file.
      *
-     * @param overwrite `true` の場合は既存ファイルを上書き作成（`FILE_OVERWRITE_IF`）、`false` の場合は新規作成のみ（`FILE_CREATE`）
+     * @param overwrite If `true`, overwrites an existing file (`FILE_OVERWRITE_IF`);
+     *   if `false`, fails if the file already exists (`FILE_CREATE`).
      */
     suspend fun writeBytes(path: String, data: ByteArray, overwrite: Boolean = true) {
         val disposition = if (overwrite) SmbCreateDisposition.FILE_OVERWRITE_IF else SmbCreateDisposition.FILE_CREATE
@@ -298,14 +301,14 @@ class SmbShare internal constructor(
     }
 
     /**
-     * ファイルに UTF-8 文字列を書き込む。
+     * Encodes [text] as UTF-8 and writes it to a file.
      */
     suspend fun writeText(path: String, text: String, overwrite: Boolean = true) {
         writeBytes(path, text.encodeToByteArray(), overwrite)
     }
 
     /**
-     * ファイル末尾にバイト配列を追記する（ファイルが存在しない場合は新規作成）。
+     * Appends a [ByteArray] to the end of a file, creating the file if it does not exist.
      */
     suspend fun appendBytes(path: String, data: ByteArray) {
         val file = openFile(
@@ -323,7 +326,7 @@ class SmbShare internal constructor(
     }
 
     /**
-     * 新しいディレクトリを作成する。
+     * Creates a new directory at [path].
      */
     suspend fun createDirectory(path: String) {
         ensureConnected()
@@ -348,21 +351,21 @@ class SmbShare internal constructor(
     }
 
     /**
-     * ファイルを削除する。
+     * Deletes the file at [path].
      */
     suspend fun deleteFile(path: String) {
         deleteEntry(path, isDirectory = false)
     }
 
     /**
-     * 空のディレクトリを削除する。
+     * Deletes the empty directory at [path].
      */
     suspend fun deleteDirectory(path: String) {
         deleteEntry(path, isDirectory = true)
     }
 
     /**
-     * 指定したパスのファイル、またはディレクトリとその配下の全エントリを再帰的に削除する。
+     * Deletes the file or directory at [path], recursively removing all descendants if it is a directory.
      */
     suspend fun deleteRecursively(path: String) {
         val meta = try {
@@ -435,7 +438,7 @@ class SmbShare internal constructor(
     }
 
     /**
-     * ファイルまたはディレクトリの名前変更・移動を行う。
+     * Renames or moves a file or directory from [fromPath] to [toPath] (`FileRenameInformation`).
      */
     suspend fun rename(fromPath: String, toPath: String, replaceIfExists: Boolean = true) {
         ensureConnected()
@@ -485,7 +488,7 @@ class SmbShare internal constructor(
     }
 
     /**
-     * `TREE_DISCONNECT` を送信して共有フォルダ接続を解除する。
+     * Sends an `SMB2 TREE_DISCONNECT` request to disconnect from this shared folder.
      */
     suspend fun closeSuspend() {
         if (disconnected) return

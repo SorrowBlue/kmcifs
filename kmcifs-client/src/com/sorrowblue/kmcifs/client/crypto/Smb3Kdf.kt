@@ -3,7 +3,7 @@ package com.sorrowblue.kmcifs.client.crypto
 import com.sorrowblue.kmcifs.client.protocol.SmbDialect
 
 /**
- * SMB 3.0 / 3.0.2 / 3.1.1 用の NIST SP800-108 Counter Mode (HMAC-SHA256) 鍵導出実装。
+ * NIST SP 800-108 Counter Mode (`HMAC-SHA256`) key derivation function for SMB 3.0, 3.0.2, and 3.1.1 (`[MS-SMB2] 3.1.4.2`).
  */
 internal object Smb3Kdf {
 
@@ -14,7 +14,8 @@ internal object Smb3Kdf {
     )
 
     /**
-     * NTLMSSP で導出された 16 バイトの SessionKey から、SMB 3.x の署名鍵・暗号化鍵・復号鍵を導出する。
+     * Derives the SMB 3.x signing, encryption (`Client-to-Server`), and decryption (`Server-to-Client`) keys
+     * from the 16-byte NTLMSSP [sessionKey].
      */
     fun deriveKeys(
         dialect: SmbDialect,
@@ -55,8 +56,8 @@ internal object Smb3Kdf {
     }
 
     /**
-     * NIST SP800-108 Counter Mode KDF (r = 32 bits big-endian, L = 128 bits big-endian).
-     * Input = [i]_4 || Label || 0x00 || Context || [L]_4
+     * NIST SP 800-108 Counter Mode KDF (`r = 32` bits big-endian, `L = 128` bits big-endian).
+     * `Input = [i]_4 || Label || 0x00 || Context || [L]_4`
      */
     fun kdfSp800108(ki: ByteArray, labelWithNull: ByteArray, context: ByteArray, bitLength: Int = 128): ByteArray {
         val counter = byteArrayOf(0x00, 0x00, 0x00, 0x01)

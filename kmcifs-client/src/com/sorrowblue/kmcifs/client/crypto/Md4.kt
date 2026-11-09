@@ -5,7 +5,7 @@ import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUIntLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeULongLE
 
 /**
- * NTLM パスワードハッシュ計算で使用する MD4 (RFC 1320) 実装。
+ * MD4 (RFC 1320) message-digest implementation used for NTLM password hashing (`NTOWFv2`).
  */
 internal object Md4 {
 

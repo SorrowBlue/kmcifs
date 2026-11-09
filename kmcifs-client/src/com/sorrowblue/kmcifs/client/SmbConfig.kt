@@ -4,39 +4,42 @@ import com.sorrowblue.kmcifs.client.protocol.SmbCipherId
 import com.sorrowblue.kmcifs.client.protocol.SmbDialect
 
 /**
- * SMB3 暗号化（Transform Header による通信暗号化）の適用ポリシー。
+ * Policy for applying SMB3 packet encryption (`SMB2_TRANSFORM_HEADER`).
  */
 enum class SmbEncryptionPolicy {
     /**
-     * サーバー（セッションまたは共有フォルダ）が暗号化を要求した場合、
-     * または [SmbConfig.preferEncryption] が有効かつサーバーが SMB 3.x 暗号化に対応している場合に暗号化する。
+     * Encrypts traffic when required by the server (session or share) or when
+     * [SmbConfig.preferEncryption] is enabled and the server supports SMB 3.x encryption.
      */
     NEGOTIATE,
 
     /**
-     * 常に SMB 3.x パケット暗号化を強制する。サーバーが暗号化に非対応の場合は接続時に例外を送出する。
+     * Forces SMB 3.x packet encryption. Throws an exception during connection if the server
+     * or credentials do not support encryption.
      */
     REQUIRED,
 
     /**
-     * クライアントからは暗号化を行わない（サーバー側が暗号化必須の設定になっている場合はサーバーに拒否される）。
+     * Never initiates encryption from the client. The server will reject the connection or share
+     * access if encryption is mandatory on the server side.
      */
     DISABLED,
 }
 
 /**
- * SMB クライアント接続設定。
+ * Configuration options for an [SmbClient] connection.
  *
- * @property dialects ネゴシエーションで提示する SMB ダイアレクト一覧
- * @property ciphers SMB 3.1.1 ネゴシエーションで提示する暗号化アルゴリズムの優先順リスト
- * @property encryptionPolicy SMB3 暗号化の適用ポリシー
- * @property preferEncryption [SmbEncryptionPolicy.NEGOTIATE] 時にサーバーが暗号化をサポートしていれば自発的に暗号化を有効にするか
- * @property alwaysSign 暗号化されていないパケットに対して常に SMB 署名を付与するか
- * @property verifyServerSignatures サーバーから受信した署名付きパケットの署名を検証するか
- * @property queryDirectoryBufferSize ディレクトリ一覧取得 (`QUERY_DIRECTORY`) の1回あたりの要求バッファサイズ（バイト）
- * @property randomAccessBufferSize [SmbRandomAccessFile] の既定の読み取りバッファサイズ（バイト）
- * @property connectTimeoutMillis TCP ソケット接続タイムアウト（ミリ秒）
- * @property requestTimeoutMillis 各 SMB リクエストの応答待機タイムアウト（ミリ秒）
+ * @property dialects SMB dialects offered during `SMB2 NEGOTIATE`, ordered by preference.
+ * @property ciphers SMB 3.1.1 encryption ciphers offered during negotiation, ordered by preference.
+ * @property encryptionPolicy Policy governing SMB 3.x packet encryption.
+ * @property preferEncryption Whether to proactively enable encryption under [SmbEncryptionPolicy.NEGOTIATE]
+ *   whenever the server supports SMB 3.x encryption.
+ * @property alwaysSign Whether to sign all unencrypted SMB packets even when the server does not require signing.
+ * @property verifyServerSignatures Whether to verify cryptographic signatures on signed responses from the server.
+ * @property queryDirectoryBufferSize Default maximum output buffer size in bytes for each `SMB2 QUERY_DIRECTORY` request.
+ * @property randomAccessBufferSize Default read buffer size in bytes for [SmbRandomAccessFile].
+ * @property connectTimeoutMillis TCP socket connection timeout in milliseconds.
+ * @property requestTimeoutMillis Timeout in milliseconds for each SMB request/response exchange.
  */
 data class SmbConfig(
     val dialects: List<SmbDialect> = listOf(

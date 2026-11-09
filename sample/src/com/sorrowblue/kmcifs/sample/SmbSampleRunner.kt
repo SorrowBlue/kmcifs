@@ -10,7 +10,7 @@ import com.sorrowblue.kmcifs.client.protocol.SmbDirectoryEntry
 import com.sorrowblue.kmcifs.client.protocol.SmbShareInfo
 
 /**
- * サンプルアプリ共通の接続パラメータ。
+ * Connection parameters shared across the sample applications.
  */
 data class SmbSampleRequest(
     val host: String,
@@ -25,7 +25,7 @@ data class SmbSampleRequest(
 )
 
 /**
- * サンプル実行結果のレポート。
+ * Execution report produced by [SmbSampleRunner].
  */
 data class SmbSampleReport(
     val platformName: String,
@@ -75,12 +75,12 @@ data class SmbSampleReport(
 }
 
 /**
- * 全プラットフォームのサンプルアプリから共通して呼び出される SMB 操作ランナー。
+ * Shared SMB operation runner invoked across all platform sample applications.
  */
 object SmbSampleRunner {
 
     /**
-     * 指定された SMB サーバーへ接続し、共有フォルダ一覧取得・ディレクトリ一覧取得・ファイル読み取りを実行する。
+     * Connects to the specified SMB server and performs share enumeration, directory listing, and file preview reading.
      */
     suspend fun execute(platformName: String, request: SmbSampleRequest): SmbSampleReport {
         val credentials = SmbCredentials(
@@ -180,7 +180,7 @@ object SmbSampleRunner {
     }
 
     /**
-     * CLI アプリ（JVM / Windows / Linux / macOS）向けの共通エントリポイントヘルパー。
+     * Common CLI entry-point helper for JVM, Windows, Linux, and macOS sample executables.
      */
     suspend fun runCli(platformName: String, args: Array<String>) {
         val parsed = parseCliArgs(args)

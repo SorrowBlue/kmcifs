@@ -42,8 +42,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * SMB 3.1.1 (NTLMv2 認証 + Preauth Integrity Hash + AES-128-GCM 暗号化) の
- * 全コマンド（共有フォルダ一覧、ディレクトリ一覧、ファイル作成・読み書き、ロック、リネーム、削除）を検証するテスト。
+ * End-to-end tests verifying SMB 3.1.1 (NTLMv2 authentication, Preauthentication Integrity Hash,
+ * and AES-128-GCM encryption) across share enumeration, directory listing, file creation, read/write,
+ * byte-range locking, renaming, and deletion.
  */
 class SmbClientEndToEndTest {
 
@@ -607,7 +608,7 @@ class SmbClientEndToEndTest {
     }
 
     /**
-     * テスト用のインメモリ SMB 3.1.1 サーバートランスポート。
+     * In-memory mock SMB 3.1.1 server transport for end-to-end testing.
      */
     private class MockSmb3ServerTransport(
         private val expectedCredentials: SmbCredentials,

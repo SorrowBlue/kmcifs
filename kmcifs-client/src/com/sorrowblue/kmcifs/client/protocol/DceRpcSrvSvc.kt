@@ -8,8 +8,8 @@ import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUIntLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUShortLE
 
 /**
- * `IPC$` 共有の `srvsvc` 名前付きパイプ上で DCE/RPC `NetrShareEnum` (Level 1) を実行し、
- * サーバー上の共有フォルダ一覧 (`SmbShareInfo`) を取得する実装。
+ * Executes DCE/RPC `NetrShareEnum` (Level 1) over the `srvsvc` named pipe on `IPC$`
+ * to enumerate shared folders ([SmbShareInfo]) on the server (`[MS-SRVS] 3.1.4.8`).
  */
 internal object DceRpcSrvSvc {
 
@@ -32,7 +32,7 @@ internal object DceRpcSrvSvc {
     )
 
     /**
-     * DCE/RPC Bind PDU (72 bytes) を構築する。
+     * Builds a 72-byte DCE/RPC `Bind` PDU.
      */
     fun buildBindPdu(callId: UInt = 1u): ByteArray {
         val pdu = ByteArray(72)
@@ -66,7 +66,7 @@ internal object DceRpcSrvSvc {
     }
 
     /**
-     * DCE/RPC Bind_ack PDU (PTYPE = 12) を検証する。
+     * Validates a DCE/RPC `Bind_ack` PDU (`PTYPE = 12`).
      */
     fun verifyBindAck(pdu: ByteArray) {
         require(pdu.size >= 24 && pdu[0].toInt() == 5 && pdu[2].toInt() == 12) {
@@ -75,7 +75,7 @@ internal object DceRpcSrvSvc {
     }
 
     /**
-     * `NetrShareEnum` (Opnum = 15, Level = 1) リクエスト PDU を構築する。
+     * Builds a `NetrShareEnum` (`Opnum = 15`, `Level = 1`) request PDU.
      */
     fun buildNetrShareEnumRequest(serverName: String, callId: UInt = 2u): ByteArray {
         val uncServer = "\\\\${serverName.trimStart('\\')}\u0000"
@@ -132,7 +132,7 @@ internal object DceRpcSrvSvc {
     }
 
     /**
-     * `NetrShareEnum` の DCE/RPC Response PDU (マルチフラグメント結合済み、または単一 PDU) から共有リストを抽出する。
+     * Extracts the list of shared folders from the reassembled NDR stub data of a `NetrShareEnum` DCE/RPC response.
      */
     fun parseNetrShareEnumResponse(stubData: ByteArray): List<SmbShareInfo> {
         if (stubData.size < 20) return emptyList()

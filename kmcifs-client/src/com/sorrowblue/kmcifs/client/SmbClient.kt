@@ -27,10 +27,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
- * SMB2 / SMB3 クライアント接続セッションを管理するクラス。
+ * Manages an SMB2/SMB3 client session over a single TCP connection.
  *
- * [SmbClient.connect] でサーバーに接続し、共有フォルダ一覧の取得 ([listShares])、
- * 共有フォルダへの接続 ([connectShare])、または `IPC$` 名前付きパイプへの接続 ([connectIpcShare]) を行う。
+ * Connect to a server via [SmbClient.connect], enumerate shares with [listShares],
+ * connect to a file share with [connectShare], or open the `IPC$` share for named pipe
+ * communication with [connectIpcShare].
  */
 class SmbClient internal constructor(
     val host: String,
@@ -258,9 +259,9 @@ class SmbClient internal constructor(
     }
 
     /**
-     * `IPC$` 共有の `srvsvc` 名前付きパイプ経由で、サーバー上の共有フォルダ一覧 (`NetrShareEnum`) を取得する。
+     * Enumerates shared folders on the server via DCE/RPC `NetrShareEnum` over the `srvsvc` named pipe on `IPC$`.
      *
-     * @param includeHidden `IPC$` や `ADMIN$`、`C$` などの管理・隠し共有も含める場合は `true`
+     * @param includeHidden Whether to include administrative and hidden shares such as `IPC$`, `ADMIN$`, and `C$`.
      */
     suspend fun listShares(includeHidden: Boolean = false): List<SmbShareInfo> {
         val ipc = connectIpcShare()
@@ -335,7 +336,7 @@ class SmbClient internal constructor(
     }
 
     /**
-     * 指定した名前の共有フォルダに接続する。
+     * Connects to the specified shared folder (`SMB2 TREE_CONNECT`) and returns an [SmbShare] handle.
      */
     suspend fun connectShare(shareName: String): SmbShare {
         val cleanName = shareName.trim('/', '\\')
@@ -364,7 +365,7 @@ class SmbClient internal constructor(
     }
 
     /**
-     * `IPC$` 共有に接続し、名前付きパイプ操作用の [SmbPipeShare] を返す。
+     * Connects to the `IPC$` share (`SMB2 TREE_CONNECT`) and returns an [SmbPipeShare] for named pipe operations.
      */
     suspend fun connectIpcShare(): SmbPipeShare {
         val uncPath = "\\\\$host\\IPC$"
@@ -396,10 +397,12 @@ class SmbClient internal constructor(
     }
 
     /**
-     * セッション確立後の SMB コマンドパケットを送受信する（署名または SMB3 暗号化を自動適用し、STATUS_PENDING の非同期中間応答も処理する）。
+     * Sends an SMB command packet after session establishment and receives its response,
+     * automatically applying packet signing or SMB3 encryption and handling interim `STATUS_PENDING` responses.
      *
-     * ソケット上のパケット送受信中に呼び出し元コルーチンがキャンセル（ExoPlayer のシークや画面終了時の割り込み等）されても、
-     * 未読レスポンスが TCP バッファに残留して後続リクエストと混線しないよう [NonCancellable] でトランザクションを完結させる。
+     * The send/receive transaction runs inside [NonCancellable] so that if the caller coroutine is cancelled
+     * mid-flight (e.g., during a media player seek or screen dismissal), no unread response remains in the
+     * TCP socket buffer to corrupt subsequent requests.
      */
     internal suspend fun executeCommand(plainRequest: ByteArray, forceEncrypt: Boolean = false): ByteArray {
         return mutex.withLock {
@@ -457,8 +460,8 @@ class SmbClient internal constructor(
     }
 
     /**
-     * 複数の関連する SMB2 リクエスト (`[CREATE, CLOSE]` など) を 1 つの Compound パケットにまとめて送受信し、
-     * 各リクエストに対応するレスポンス配列のリストを返す。
+     * Sends multiple related SMB2 requests (such as `[CREATE, CLOSE]`) in a single Compounded Related packet
+     * and returns the corresponding response byte arrays in request order.
      */
     internal suspend fun executeCompoundCommands(
         plainRequests: List<ByteArray>,
@@ -672,7 +675,7 @@ class SmbClient internal constructor(
     }
 
     /**
-     * MS-SMB2 3.2.5.1.3 に従い、非暗号化レスポンスの署名検証および署名ストリッピングの検出を行う。
+     * Verifies signatures and detects signature stripping on unencrypted responses per `[MS-SMB2] 3.2.5.1.3`.
      */
     private fun verifyIncomingPacketSignatureIfRequired(packet: ByteArray, header: SmbHeader, wasEncrypted: Boolean) {
         if (wasEncrypted || !config.verifyServerSignatures || isGuestOrAnonymousSession) return
@@ -709,7 +712,7 @@ class SmbClient internal constructor(
     }
 
     /**
-     * `LOGOFF` リクエストを送信してセッションとソケットを正常終了する。
+     * Sends an `SMB2 LOGOFF` request and closes the underlying TCP transport.
      */
     suspend fun closeSuspend() {
         if (closed) return
@@ -735,7 +738,7 @@ class SmbClient internal constructor(
 
     companion object {
         /**
-         * 指定された SMB サーバーへ TCP 接続し、ネゴシエーションと NTLMv2 認証を完了した [SmbClient] を返す。
+         * Connects to the specified SMB server over TCP and completes dialect negotiation and NTLMv2 authentication.
          */
         suspend fun connect(
             host: String,

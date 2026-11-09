@@ -1,7 +1,7 @@
 package com.sorrowblue.kmcifs.client.crypto
 
 /**
- * SMB 3.1.1 の Preauth Integrity Hash 計算で使用する SHA-512 実装。
+ * SHA-512 implementation used for SMB 3.1.1 Preauthentication Integrity Hash computation.
  */
 internal object Sha512 {
 

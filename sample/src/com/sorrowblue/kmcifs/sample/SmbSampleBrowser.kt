@@ -35,7 +35,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * サンプルアプリのファイルビューアで扱うプレビュー種別。
+ * Preview categories supported by the sample app file viewer.
  */
 enum class SmbPreviewType(val label: String) {
     TEXT("TEXT"),
@@ -85,7 +85,7 @@ enum class SmbPreviewType(val label: String) {
 }
 
 /**
- * 確立された SMB セッションの概要情報。
+ * Summary information for an established SMB session.
  */
 data class SmbConnectionSummary(
     val host: String,
@@ -96,7 +96,7 @@ data class SmbConnectionSummary(
 )
 
 /**
- * 指定ディレクトリ内のフォルダ一覧とファイル一覧。
+ * Folder and file lists within a specified directory.
  */
 data class SmbDirectoryListing(
     val connection: SmbConnectionSummary,
@@ -107,7 +107,7 @@ data class SmbDirectoryListing(
 )
 
 /**
- * テキストファイルのプレビュー結果。
+ * Preview result for a text file.
  */
 data class SmbTextFileContent(
     val fileName: String,
@@ -119,7 +119,7 @@ data class SmbTextFileContent(
 )
 
 /**
- * パス操作やサイズ・日時の表示文字列変換を行うユーティリティ。
+ * Utilities for path manipulation and formatting sizes, durations, and timestamps.
  */
 object SmbFormatUtils {
 
@@ -201,7 +201,7 @@ object SmbFormatUtils {
 }
 
 /**
- * サンプルアプリ向けに SMB セッションを保持し、共有フォルダ一覧取得・ディレクトリ探索・ファイル内容取得を行うクラス。
+ * Manages an SMB session for the sample app, providing share enumeration, directory browsing, and file content retrieval.
  */
 class SmbBrowserSession {
 
@@ -212,7 +212,7 @@ class SmbBrowserSession {
     private var activeShare: SmbShare? = null
 
     /**
-     * 指定した接続設定で SMB サーバーへ接続し、セッション情報を返す。
+     * Connects to the SMB server using the given connection configuration and returns the session summary.
      */
     suspend fun connect(config: SmbSavedConnection): SmbConnectionSummary = mutex.withLock {
         closeInternal()
@@ -223,8 +223,8 @@ class SmbBrowserSession {
     }
 
     /**
-     * 既に同一の接続先・認証情報・暗号化ポリシーで接続中であれば既存セッションを維持し、
-     * 未接続または接続設定が異なる場合のみ再接続を行う。
+     * Reuses the existing session if already connected with identical host, credentials, and encryption policy;
+     * otherwise reconnects.
      */
     suspend fun ensureConnected(config: SmbSavedConnection): SmbConnectionSummary = mutex.withLock {
         val currentClient = activeClient
@@ -250,7 +250,7 @@ class SmbBrowserSession {
     }
 
     /**
-     * 接続中のサーバーから共有フォルダ一覧を取得する。
+     * Retrieves the list of shares from the connected server.
      */
     suspend fun listShares(includeHidden: Boolean = false): List<SmbShareInfo> = mutex.withLock {
         val client = ensureClientLocked()
@@ -263,7 +263,7 @@ class SmbBrowserSession {
     }
 
     /**
-     * 指定した共有フォルダおよび相対パスのディレクトリ一覧（フォルダ一覧・ファイル一覧）を取得する。
+     * Retrieves the directory listing (sorted folders and files) for the specified share and relative path.
      */
     suspend fun listDirectory(shareName: String, directoryPath: String): SmbDirectoryListing = mutex.withLock {
         val cleanShare = shareName.trim('/', '\\', ' ')
@@ -298,7 +298,7 @@ class SmbBrowserSession {
     }
 
     /**
-     * テキストファイルの内容を読み取る。
+     * Reads the content of a text file up to [maxBytes].
      */
     suspend fun readTextFile(
         shareName: String,
@@ -332,7 +332,7 @@ class SmbBrowserSession {
     }
 
     /**
-     * 画像などのファイル全体をバイト配列として読み取る。
+     * Reads an entire file (such as an image) into a byte array.
      */
     suspend fun readFileBytes(
         shareName: String,
@@ -375,9 +375,9 @@ class SmbBrowserSession {
     }
 
     /**
-     * 動画などの大きなファイルをチャンク単位で順次読み取り、[onChunk] コールバックへ渡す。
+     * Sequentially reads a large file (such as a video) in chunks and passes each chunk to [onChunk].
      *
-     * @return 読み取った合計バイト数
+     * @return Total number of bytes read.
      */
     suspend fun streamFile(
         shareName: String,
@@ -415,8 +415,8 @@ class SmbBrowserSession {
     }
 
     /**
-     * 動画ストリーミング再生向けに、リモートファイルを開いたまま任意オフセットからオンデマンド読み取りを行う
-     * [SmbRandomAccessStream] を返す。
+     * Returns an [SmbRandomAccessStream] that keeps the remote file open for on-demand reads from arbitrary offsets
+     * during video streaming playback.
      */
     suspend fun openRandomAccessStream(
         shareName: String,
@@ -468,7 +468,7 @@ class SmbBrowserSession {
     }
 
     /**
-     * 現在開いている共有およびクライアント接続を閉じる。
+     * Closes the currently open share and client connection.
      */
     suspend fun closeSuspend() = mutex.withLock {
         closeInternal()
@@ -551,11 +551,10 @@ class SmbBrowserSession {
 }
 
 /**
- * オープン済みの [SmbFile] に対して、マルチブロック LRU キャッシュと非同期プリフェッチ（先読み）を伴う
- * ランダムアクセス読み取りを提供するストリーム。
+ * Random-access read stream over an open [SmbFile] with multi-block LRU caching and asynchronous prefetching.
  *
- * 映像トラックと音声トラックが異なるファイルオフセットを交互に読み取る際のキャッシュスラッシングを防ぎ、
- * 連続ブロックをバックグラウンドで先読みすることで再生途切れを防止する。
+ * Prevents cache thrashing when video and audio tracks interleave reads at different file offsets,
+ * and prefetches consecutive blocks in the background to avoid playback stalls.
  */
 class SmbRandomAccessStream internal constructor(
     private val sessionMutex: Mutex,
@@ -601,14 +600,14 @@ class SmbRandomAccessStream internal constructor(
     private var prefetchToBlock: Long = -1L
 
     /**
-     * ファイル内の [position] から最大 [length] バイトを読み取り、[buffer] の [offset] 位置へ格納する。
+     * Reads up to [length] bytes starting at [position] in the file into [buffer] at [offset].
      *
-     * メモリキャッシュ ([blockCache]) へのアクセスは [cacheMutex] で保護し、ネットワーク通信を行う [sessionMutex] と分離することで、
-     * バックグラウンド先読み通信中でもキャッシュ済みブロックを待機なしで即座に返却する。
-     * また、コンテナのヘッダ・インデックス解析時（ファイル末尾や各チャンクへのランダムシーク時）には不要な先読みを抑制し、
-     * 連続読み取り（シーケンシャル再生）に入った時点でプリフェッチを開始する。
+     * Access to the in-memory cache ([blockCache]) is guarded by [cacheMutex] separately from [sessionMutex],
+     * allowing cached blocks to be returned immediately without waiting on background prefetch network I/O.
+     * Suppresses unnecessary prefetching during container header/index parsing (random seeks to the end of the file
+     * or across chunks) and starts prefetching once sequential playback reads are detected.
      *
-     * @return 実際に読み取ったバイト数。ファイル終端に達している場合は `-1`。
+     * @return The number of bytes actually read, or `-1` if the end of the file has been reached.
      */
     suspend fun readAt(position: Long, buffer: ByteArray, offset: Int, length: Int): Int {
         if (closed) return -1
@@ -787,10 +786,10 @@ class SmbRandomAccessStream internal constructor(
 }
 
 /**
- * マルチプラットフォームで動作するローカルループバック (`127.0.0.1`) HTTP 1.1 Range ストリーミングサーバー。
+ * Multiplatform local loopback (`127.0.0.1`) HTTP/1.1 Range streaming server.
  *
- * [SmbRandomAccessStream] をバックエンドとして `206 Partial Content` / `Accept-Ranges: bytes` を提供し、
- * 各 OS の外部メディアプレイヤーや内蔵プレイヤーから全量ダウンロードなしでオンデマンド再生できるようにする。
+ * Serves `206 Partial Content` and `Accept-Ranges: bytes` backed by an [SmbRandomAccessStream],
+ * enabling external or built-in OS media players to play remote media on demand without downloading the entire file.
  */
 class SmbHttpRangeServer private constructor(
     private val selectorManager: SelectorManager,

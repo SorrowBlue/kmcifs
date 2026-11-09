@@ -9,25 +9,25 @@ import com.sorrowblue.kmcifs.client.protocol.SmbShareAccess
 import kotlinx.coroutines.runBlocking
 
 /**
- * [SmbRandomAccessFile] のオープンモード。
+ * Open mode for [SmbRandomAccessFile].
  *
- * Java の `RandomAccessFile` と同じモード文字列（`"r"`, `"rw"`, `"rws"`, `"rwd"`）に対応する。
+ * Corresponds to the mode strings used by `java.io.RandomAccessFile` (`"r"`, `"rw"`, `"rws"`, `"rwd"`).
  */
 enum class SmbRandomAccessMode(
     val modeString: String,
     val writable: Boolean,
     val writeThrough: Boolean,
 ) {
-    /** 読み取り専用で既存ファイルを開く。ファイルが存在しない場合はエラーとなる。 */
+    /** Opens an existing file for reading only. Fails if the file does not exist. */
     READ_ONLY(modeString = "r", writable = false, writeThrough = false),
 
-    /** 読み書き両用で開く。ファイルが存在しない場合は新規作成する。 */
+    /** Opens a file for reading and writing, creating it if it does not already exist. */
     READ_WRITE(modeString = "rw", writable = true, writeThrough = false),
 
-    /** 読み書き両用で開き、データとメタデータの変更をサーバー側ストレージへ同期書き込みする (`FILE_WRITE_THROUGH`)。 */
+    /** Opens a file for reading and writing, writing every update to file content or metadata synchronously to server storage (`FILE_WRITE_THROUGH`). */
     READ_WRITE_SYNC(modeString = "rws", writable = true, writeThrough = true),
 
-    /** 読み書き両用で開き、データの変更をサーバー側ストレージへ同期書き込みする (`FILE_WRITE_THROUGH`)。 */
+    /** Opens a file for reading and writing, writing every update to file content synchronously to server storage (`FILE_WRITE_THROUGH`). */
     READ_WRITE_DSYNC(modeString = "rwd", writable = true, writeThrough = true);
 
     companion object {
@@ -46,25 +46,26 @@ enum class SmbRandomAccessMode(
 }
 
 /**
- * ファイル末尾（EOF）を超えて読み取ろうとした際に送出される例外。
+ * Exception thrown when an attempt is made to read past the end of an SMB file (EOF).
  */
 class SmbEndOfFileException(
     message: String = "End of SMB file reached",
 ) : Exception(message)
 
 /**
- * Java の `RandomAccessFile` に相当するランダムアクセス API を提供する SMB ファイルクラス。
+ * Provides a `java.io.RandomAccessFile`-compatible random-access API over a remote SMB file.
  *
- * ファイルポインタ（[position]）を内部で保持し、[seek] による任意位置への移動、
- * [read] / [readByte] による現在位置からの読み取り、[write] による現在位置への書き込み、
- * および [length] / [setLength] によるファイルサイズの参照・変更を行う。
+ * Maintains an internal file pointer ([position]) and supports seeking to arbitrary offsets ([seek]),
+ * reading from the current position ([read], [readByte], [readFully]), writing at the current position ([write]),
+ * and querying or changing the file length ([length] / [setLength]).
  *
- * 小さな読み取り（[readByte] やヘッダ解析など）で先読みバッファリングを行いたい場合は、
- * [bufferSize] に正のバイト数を指定することでインメモリ読み取りバッファを有効化できる（既定値は `0` でバッファリングなし）。
- * 書き込みやサイズ変更が行われた際はバッファを即座に無効化し、読み書きの整合性を維持する。
+ * For workloads with frequent small reads (such as [readByte] or container header parsing), pass a positive
+ * [bufferSize] to enable an in-memory read-ahead buffer (defaults to `0`, disabling buffering). Any write or
+ * size change immediately invalidates the read buffer to preserve read-after-write consistency.
  *
- * なお、Java の `RandomAccessFile` と同様に 1 つの [SmbRandomAccessFile] インスタンスは単一スレッドから順次操作する設計となっており、
- * 別スレッドで並列に読み取る場合はスレッドごとに個別の [SmbRandomAccessFile] インスタンスを開くこと（共有元の [SmbShare] / [SmbClient] はマルチスレッド安全に共有可能）。
+ * Like `java.io.RandomAccessFile`, a single [SmbRandomAccessFile] instance is designed for sequential use from
+ * one thread at a time. To read concurrently from multiple threads, open a separate [SmbRandomAccessFile]
+ * instance per thread (the underlying [SmbShare] and [SmbClient] are thread-safe and can be shared).
  */
 class SmbRandomAccessFile(
     val share: SmbShare,
@@ -112,33 +113,33 @@ class SmbRandomAccessFile(
     private val scratchBuffer: ByteArray = ByteArray(8)
 
     /**
-     * ファイルハンドルが現在オープンされているかどうか。
+     * Whether the underlying SMB file handle is currently open.
      */
     val isOpen: Boolean
         get() = smbFile != null && !closed
 
     /**
-     * 現在のファイルポインタ位置（先頭からのバイトオフセット）。
+     * Current file pointer offset in bytes from the beginning of the file.
      */
     val position: Long
         get() = currentPosition
 
     /**
-     * 現在のファイルサイズ（バイト単位）。
+     * Current length of the file in bytes.
      *
-     * オープン済みの場合はサーバーから取得・更新されたファイルサイズを返す。
+     * Returns the file size retrieved from the server and updated by local writes or [setLength].
      */
     val length: Long
         get() = requireOpenFile().size
 
     /**
-     * オープン済みのファイルのメタデータ。
+     * Metadata of the open SMB file.
      */
     val metadata: SmbFileMetadata
         get() = requireOpenFile().metadata
 
     /**
-     * リモート SMB ファイルをオープンする。既にオープン済みの場合は何もしない。
+     * Opens the remote SMB file if it is not already open.
      */
     suspend fun open(): SmbRandomAccessFile {
         check(!closed) { "SmbRandomAccessFile is already closed" }
@@ -149,9 +150,11 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 次回の読み書きが行われるファイルポインタ位置を先頭からのバイトオフセット [pos] に移動する。
+     * Sets the file-pointer offset, measured from the beginning of this file, at which the next
+     * read or write occurs.
      *
-     * [pos] にはファイル末尾を超える値も指定でき、その位置へ書き込みを行った時点でファイルサイズが拡張される。
+     * The offset may be set beyond the end of the file; setting the offset beyond the end of the file
+     * does not change the file length until data is written at that offset.
      */
     fun seek(pos: Long) {
         require(pos >= 0L) { "Negative seek offset: $pos" }
@@ -160,8 +163,8 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置から最大 [n] バイトをスキップし、実際にスキップされたバイト数を返す。
-     * ファイル末尾を超えてスキップすることはない。
+     * Attempts to skip over [n] bytes of input starting from the current position, returning the
+     * actual number of bytes skipped. Never skips past the end of the file.
      */
     fun skipBytes(n: Int): Int {
         if (n <= 0) return 0
@@ -174,8 +177,8 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置から 1 バイトを読み取り、`0..255` の整数として返す。
-     * ファイル末尾に達している場合は `-1` を返す。
+     * Reads a single byte from the current position and returns it as an integer in the range `0..255`,
+     * or `-1` if the end of the file has been reached.
      */
     fun read(): Int {
         check(!closed) { "SmbRandomAccessFile is closed" }
@@ -224,8 +227,8 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置から符号付き 1 バイト（[Byte]）を読み取り、ファイルポインタを 1 進める。
-     * ファイル末尾に達している場合は [SmbEndOfFileException] を送出する。
+     * Reads a signed 8-bit value ([Byte]) from the current position and advances the file pointer by 1.
+     * Throws [SmbEndOfFileException] if the end of the file has been reached.
      */
     fun readByte(): Byte {
         val b = read()
@@ -234,8 +237,8 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置から符号なし 1 バイト（`0..255`）を読み取り、ファイルポインタを 1 進める。
-     * ファイル末尾に達している場合は [SmbEndOfFileException] を送出する。
+     * Reads an unsigned 8-bit value (`0..255`) from the current position and advances the file pointer by 1.
+     * Throws [SmbEndOfFileException] if the end of the file has been reached.
      */
     fun readUnsignedByte(): Int {
         val b = read()
@@ -244,14 +247,14 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置から配列 [b] に最大 `b.size` バイトを読み込み、実際に読み取ったバイト数を返す。
-     * ファイル末尾に達しているため 1 バイトも読み取れなかった場合は `-1` を返す。
+     * Reads up to `b.size` bytes from the current position into [b] and returns the number of bytes read,
+     * or `-1` if no bytes could be read because the end of the file has been reached.
      */
     fun read(b: ByteArray): Int = read(b, 0, b.size)
 
     /**
-     * 現在位置から配列 [b] の [off] 番目以降へ最大 [len] バイトを読み込み、実際に読み取ったバイト数を返す。
-     * ファイル末尾に達しているため 1 バイトも読み取れなかった場合は `-1` を返す。
+     * Reads up to [len] bytes from the current position into [b] starting at offset [off], returning the
+     * number of bytes read or `-1` if the end of the file has been reached.
      */
     fun read(b: ByteArray, off: Int, len: Int): Int {
         require(off >= 0 && len >= 0 && len <= b.size - off) {
@@ -351,7 +354,7 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置から最大 [length] バイトを読み取り、新しいバイト配列として返す。
+     * Reads up to [length] bytes from the current position and returns them as a new [ByteArray].
      */
     fun readBytes(length: Int): ByteArray {
         require(length >= 0) { "length must be non-negative: $length" }
@@ -363,8 +366,8 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置から [len] バイトすべてを配列 [b]（開始位置 [off]）へ読み込む。
-     * [len] バイト読み切る前にファイル末尾へ達した場合は [SmbEndOfFileException] を送出する。
+     * Reads exactly [len] bytes from the current position into [b] starting at [off].
+     * Throws [SmbEndOfFileException] if the end of the file is reached before [len] bytes are read.
      */
     fun readFully(b: ByteArray, off: Int = 0, len: Int = b.size - off) {
         require(off >= 0 && len >= 0 && len <= b.size - off) {
@@ -381,12 +384,12 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置から 1 バイトを読み取り、`0` 以外なら `true`、`0` なら `false` を返す。
+     * Reads a single byte from the current position and returns `true` if it is non-zero, or `false` if zero.
      */
     fun readBoolean(): Boolean = readByte().toInt() != 0
 
     /**
-     * 現在位置からビッグエンディアンの符号付き 16 ビット整数を読み取る。
+     * Reads a signed 16-bit big-endian integer from the current position.
      */
     fun readShort(): Short {
         readFully(scratchBuffer, 0, 2)
@@ -394,7 +397,7 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置からビッグエンディアンの符号なし 16 ビット整数を読み取る。
+     * Reads an unsigned 16-bit big-endian integer from the current position.
      */
     fun readUnsignedShort(): Int {
         readFully(scratchBuffer, 0, 2)
@@ -402,7 +405,7 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置からビッグエンディアンの 32 ビット整数を読み取る。
+     * Reads a signed 32-bit big-endian integer from the current position.
      */
     fun readInt(): Int {
         readFully(scratchBuffer, 0, 4)
@@ -413,7 +416,7 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置からビッグエンディアンの 64 ビット整数を読み取る。
+     * Reads a signed 64-bit big-endian integer from the current position.
      */
     fun readLong(): Long {
         readFully(scratchBuffer, 0, 8)
@@ -428,7 +431,7 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置へ下位 8 ビット（1 バイト）を書き込み、ファイルポインタを 1 進める。
+     * Writes the low-order 8 bits of [b] at the current position and advances the file pointer by 1.
      */
     fun write(b: Int) {
         scratchBuffer[0] = b.toByte()
@@ -436,21 +439,22 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置へ 1 バイトを書き込み、ファイルポインタを 1 進める。
+     * Writes a single byte [v] at the current position and advances the file pointer by 1.
      */
     fun writeByte(v: Int) {
         write(v)
     }
 
     /**
-     * 現在位置へバイト配列 [b] の全内容を書き込み、ファイルポインタを進ませる。
+     * Writes all bytes from [b] at the current position and advances the file pointer.
      */
     fun write(b: ByteArray) {
         write(b, 0, b.size)
     }
 
     /**
-     * 現在位置へバイト配列 [b] の [off] から [len] バイトを書き込み、実際に書き込まれた分だけファイルポインタを進める。
+     * Writes [len] bytes from [b] starting at offset [off] at the current position and advances
+     * the file pointer by the number of bytes written.
      */
     fun write(b: ByteArray, off: Int, len: Int): Int = runBlocking {
         check(mode.writable) { "File \"$path\" is opened in read-only mode (${mode.modeString})" }
@@ -472,14 +476,14 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置へ真偽値（1 バイト）を書き込む。
+     * Writes a boolean value as a single byte (`1` for `true`, `0` for `false`) at the current position.
      */
     fun writeBoolean(v: Boolean) {
         write(if (v) 1 else 0)
     }
 
     /**
-     * 現在位置へビッグエンディアンの 16 ビット整数を書き込む。
+     * Writes a 16-bit big-endian integer at the current position.
      */
     fun writeShort(v: Int) {
         scratchBuffer[0] = ((v ushr 8) and 0xFF).toByte()
@@ -488,7 +492,7 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置へビッグエンディアンの 32 ビット整数を書き込む。
+     * Writes a 32-bit big-endian integer at the current position.
      */
     fun writeInt(v: Int) {
         scratchBuffer[0] = ((v ushr 24) and 0xFF).toByte()
@@ -499,7 +503,7 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * 現在位置へビッグエンディアンの 64 ビット整数を書き込む。
+     * Writes a 64-bit big-endian integer at the current position.
      */
     fun writeLong(v: Long) {
         scratchBuffer[0] = ((v ushr 56) and 0xFFL).toByte()
@@ -514,10 +518,10 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * ファイルサイズを [newLength] バイトに変更（トランケートまたは拡張）する。
+     * Truncates or extends the file to [newLength] bytes.
      *
-     * 現在の [position] が [newLength] より大きい場合、`RandomAccessFile.setLength` と同様に
-     * [position] は [newLength] へ移動する。
+     * If the current [position] is greater than [newLength], [position] is set to [newLength]
+     * (matching `java.io.RandomAccessFile.setLength`).
      */
     fun setLength(newLength: Long) = runBlocking {
         check(mode.writable) { "File \"$path\" is opened in read-only mode (${mode.modeString})" }
@@ -530,7 +534,7 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * サーバー側の書き込みバッファをディスクへフラッシュする (`SMB2 FLUSH`)。
+     * Flushes server-side write buffers for this file to persistent storage (`SMB2 FLUSH`).
      */
     fun flush() = runBlocking {
         val file = ensureOpenLocked()
@@ -538,7 +542,7 @@ class SmbRandomAccessFile(
     }
 
     /**
-     * リモート SMB ファイルハンドルをサーバー上で閉じ、内部バッファを解放する (`SMB2 CLOSE`)。
+     * Closes the remote SMB file handle on the server (`SMB2 CLOSE`) and releases internal buffers.
      */
     suspend fun closeSuspend() {
         if (closed) return
@@ -635,8 +639,8 @@ class SmbRandomAccessFile(
         const val DEFAULT_BUFFER_SIZE: Int = 0
 
         /**
-         * 指定した共有フォルダ [share] 上の [path] を [mode]（`"r"`, `"rw"`, `"rws"`, `"rwd"`）で開き、
-         * オープン済みの [SmbRandomAccessFile] を返す。
+         * Opens the file at [path] on [share] with the specified [mode] string (`"r"`, `"rw"`, `"rws"`, `"rwd"`)
+         * and returns an open [SmbRandomAccessFile].
          */
         suspend fun open(
             share: SmbShare,
@@ -653,8 +657,8 @@ class SmbRandomAccessFile(
         }
 
         /**
-         * 指定した共有フォルダ [share] 上の [path] を [mode] で開き、
-         * オープン済みの [SmbRandomAccessFile] を返す。
+         * Opens the file at [path] on [share] with the specified [SmbRandomAccessMode]
+         * and returns an open [SmbRandomAccessFile].
          */
         suspend fun open(
             share: SmbShare,

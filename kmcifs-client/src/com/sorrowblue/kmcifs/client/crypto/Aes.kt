@@ -1,7 +1,8 @@
 package com.sorrowblue.kmcifs.client.crypto
 
 /**
- * SMB 3.x の署名 (AES-128-CMAC) および暗号化 (AES-128-CCM / AES-128-GCM) で使用する AES-128 実装。
+ * Pure Kotlin AES-128 implementation used for SMB 3.x message signing (`AES-128-CMAC`)
+ * and packet encryption (`AES-128-CCM` / `AES-128-GCM`).
  */
 internal object Aes {
 
@@ -155,7 +156,7 @@ internal object Aes {
     }
 
     /**
-     * AES-128-CMAC (RFC 4493)。SMB 3.x のメッセージ署名に使用する。
+     * Computes AES-128-CMAC (RFC 4493) for SMB 3.x packet signing.
      */
     fun cmac(key: ByteArray, data: ByteArray): ByteArray {
         val ctx = contextForKey(key)
@@ -216,9 +217,10 @@ internal object Aes {
     }
 
     /**
-     * AES-128-CCM 暗号化 (RFC 3610)。
-     * SMB 3.0 / 3.0.2 / 3.1.1 では Nonce = 11 bytes (L = 4), Tag = 16 bytes (M = 16) を使用する。
-     * @return Pair(Ciphertext, 16-byte Tag)
+     * Encrypts [plaintext] using AES-128-CCM (RFC 3610).
+     * SMB 3.0 / 3.0.2 / 3.1.1 uses an 11-byte nonce (`L = 4`) and a 16-byte authentication tag (`M = 16`).
+     *
+     * @return Pair of `(Ciphertext, 16-byte Tag)`.
      */
     fun ccmEncrypt(key: ByteArray, nonce: ByteArray, aad: ByteArray, plaintext: ByteArray): Pair<ByteArray, ByteArray> {
         require(nonce.size in 7..13) { "CCM nonce must be 7..13 bytes" }
@@ -235,7 +237,7 @@ internal object Aes {
     }
 
     /**
-     * AES-128-CCM 復号および認証タグ検証。
+     * Decrypts [ciphertext] and verifies its 16-byte authentication tag using AES-128-CCM.
      */
     fun ccmDecrypt(key: ByteArray, nonce: ByteArray, aad: ByteArray, ciphertext: ByteArray, expectedTag: ByteArray): ByteArray {
         require(nonce.size in 7..13) { "CCM nonce must be 7..13 bytes" }
@@ -339,8 +341,8 @@ internal object Aes {
     }
 
     /**
-     * AES-128-GCM 暗号化 (NIST SP 800-38D)。
-     * SMB 3.1.1 では Nonce = 12 bytes, Tag = 16 bytes を使用する。
+     * Encrypts [plaintext] using AES-128-GCM (NIST SP 800-38D).
+     * SMB 3.1.1 uses a 12-byte nonce (IV) and a 16-byte authentication tag.
      */
     fun gcmEncrypt(key: ByteArray, iv: ByteArray, aad: ByteArray, plaintext: ByteArray): Pair<ByteArray, ByteArray> {
         require(iv.size == 12) { "GCM IV must be 12 bytes" }
@@ -359,7 +361,7 @@ internal object Aes {
     }
 
     /**
-     * AES-128-GCM 復号および認証タグ検証。
+     * Decrypts [ciphertext] and verifies its 16-byte authentication tag using AES-128-GCM.
      */
     fun gcmDecrypt(key: ByteArray, iv: ByteArray, aad: ByteArray, ciphertext: ByteArray, expectedTag: ByteArray): ByteArray {
         require(iv.size == 12) { "GCM IV must be 12 bytes" }

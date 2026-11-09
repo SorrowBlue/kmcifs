@@ -1,7 +1,7 @@
 package com.sorrowblue.kmcifs.client.crypto
 
 /**
- * SMB 2.x メッセージ署名および SMB 3.x SP800-108 鍵導出で使用する SHA-256 / HMAC-SHA256 実装。
+ * SHA-256 and HMAC-SHA256 implementation used for SMB 2.x packet signing and SMB 3.x SP800-108 key derivation.
  */
 internal object Sha256 {
 

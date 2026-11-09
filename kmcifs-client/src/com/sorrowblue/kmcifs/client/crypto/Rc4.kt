@@ -1,7 +1,7 @@
 package com.sorrowblue.kmcifs.client.crypto
 
 /**
- * NTLMSSP セッション鍵交換 (NTLMSSP_NEGOTIATE_KEY_EXCH) で使用する RC4 (ARC4) 実装。
+ * RC4 (ARC4) stream cipher implementation used for NTLMSSP session key exchange (`NTLMSSP_NEGOTIATE_KEY_EXCH`).
  */
 internal object Rc4 {
 

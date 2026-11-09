@@ -14,10 +14,10 @@ import kotlinx.io.Source
 import kotlinx.io.buffered
 
 /**
- * オープン済みのリモート SMB ファイルハンドルを表すクラス。
+ * Represents an open handle to a remote SMB file.
  *
- * 任意オフセットからの読み取り ([read])、書き込み ([write])、
- * バイト範囲の排他ロック・共有ロック ([lock] / [unlock])、およびサイズ変更 ([setLength]) を提供する。
+ * Provides offset-based reads ([read], [readInto]) and writes ([write]),
+ * byte-range exclusive or shared locking ([lock] / [unlock]), and file truncation or extension ([setLength]).
  */
 class SmbFile internal constructor(
     val share: SmbShare,
@@ -44,8 +44,8 @@ class SmbFile internal constructor(
     }
 
     /**
-     * 指定したオフセットから最大 [length] バイトを読み取る。
-     * サーバーの `MaxReadSize` を超える長さも自動的にチャンク分割して読み取る。
+     * Reads up to [length] bytes starting at [offset].
+     * Requests exceeding the server's `MaxReadSize` are automatically split into chunks.
      */
     suspend fun read(offset: Long, length: Int): ByteArray {
         ensureOpen()
@@ -64,8 +64,10 @@ class SmbFile internal constructor(
     }
 
     /**
-     * 指定したオフセットから最大 [length] バイトを読み取り、呼び出し元の [destination]（開始位置 [destinationOffset]）へ直接書き込む。
-     * 中間配列を生成しないゼロコピー読み取りを行い、実際に読み取られたバイト数（EOF 時は `0`）を返す。
+     * Reads up to [length] bytes starting at [offset] directly into [destination] at [destinationOffset]
+     * without allocating intermediate byte arrays.
+     *
+     * @return Total number of bytes read, or `0` if EOF is reached.
      */
     suspend fun readInto(
         offset: Long,
@@ -129,7 +131,7 @@ class SmbFile internal constructor(
     }
 
     /**
-     * ファイル先頭から末尾まで全バイトを読み取る。
+     * Reads all bytes from the beginning of the file to the end.
      */
     suspend fun readAll(): ByteArray {
         ensureOpen()
@@ -141,10 +143,10 @@ class SmbFile internal constructor(
     }
 
     /**
-     * 指定したオフセットへバイト配列を書き込む。
-     * サーバーの `MaxWriteSize` を超えるデータも自動的にチャンク分割して書き込む。
+     * Writes a slice of [data] starting at file [offset].
+     * Payloads exceeding the server's `MaxWriteSize` are automatically split into chunks.
      *
-     * @return 実際に書き込まれた合計バイト数
+     * @return Total number of bytes written.
      */
     suspend fun write(
         offset: Long,
@@ -186,12 +188,14 @@ class SmbFile internal constructor(
     }
 
     /**
-     * ファイルの指定バイト範囲に対して排他ロックまたは共有ロックを取得する (`SMB2 LOCK`)。
+     * Acquires an exclusive or shared byte-range lock on the file (`SMB2 LOCK`).
      *
-     * @param offset ロック開始オフセット
-     * @param length ロックするバイト長
-     * @param exclusive `true` の場合は排他ロック (`SMB2_LOCKFLAG_EXCLUSIVE_LOCK`)、`false` の場合は共有ロック (`SMB2_LOCKFLAG_SHARED_LOCK`)
-     * @param failImmediately ロックが競合している場合に待機せず即座に失敗させる場合は `true`
+     * @param offset Starting byte offset of the lock range.
+     * @param length Number of bytes to lock.
+     * @param exclusive `true` for an exclusive lock (`SMB2_LOCKFLAG_EXCLUSIVE_LOCK`),
+     *   or `false` for a shared lock (`SMB2_LOCKFLAG_SHARED_LOCK`).
+     * @param failImmediately If `true`, fails immediately (`SMB2_LOCKFLAG_FAIL_IMMEDIATELY`) when the range conflicts
+     *   with an existing lock instead of waiting.
      */
     suspend fun lock(
         offset: Long = 0L,
@@ -221,7 +225,7 @@ class SmbFile internal constructor(
     }
 
     /**
-     * [lock] で取得した指定バイト範囲のロックを解除する (`SMB2 LOCK` with `SMB2_LOCKFLAG_UNLOCK`)。
+     * Releases a byte-range lock previously acquired with [lock] (`SMB2 LOCK` with `SMB2_LOCKFLAG_UNLOCK`).
      */
     suspend fun unlock(offset: Long = 0L, length: Long = Long.MAX_VALUE) {
         ensureOpen()
@@ -238,7 +242,7 @@ class SmbFile internal constructor(
     }
 
     /**
-     * ファイルサイズを変更（トランケートまたは拡張）する (`FileEndOfFileInformation`)。
+     * Truncates or extends the file to [newSize] bytes (`FileEndOfFileInformation`).
      */
     suspend fun setLength(newSize: Long) {
         ensureOpen()
@@ -256,7 +260,7 @@ class SmbFile internal constructor(
     }
 
     /**
-     * サーバー側の書き込みバッファをストレージにフラッシュする (`SMB2 FLUSH`)。
+     * Flushes server-side write buffers for this file to persistent storage (`SMB2 FLUSH`).
      */
     suspend fun flush() {
         ensureOpen()
@@ -270,7 +274,7 @@ class SmbFile internal constructor(
     }
 
     /**
-     * このファイルハンドルをラップした [SmbRandomAccessFile] を返す。
+     * Wraps this open file handle in an [SmbRandomAccessFile].
      */
     fun toRandomAccessFile(
         path: String = "",
@@ -286,10 +290,10 @@ class SmbFile internal constructor(
     }
 
     /**
-     * このファイルを読み取る `kotlinx.io.RawSource` を返す。
+     * Returns a `kotlinx.io.RawSource` that reads from this file.
      *
-     * @param startOffset 読み取り開始オフセット（デフォルトは `0L`）
-     * @param closeFileOnClose `Source.close()` 時にこの [SmbFile] ハンドルも閉じる場合は `true`
+     * @param startOffset Initial byte offset from which to start reading (defaults to `0L`).
+     * @param closeFileOnClose Whether closing the returned source also closes this [SmbFile] handle.
      */
     fun asRawSource(
         startOffset: Long = 0L,
@@ -341,7 +345,7 @@ class SmbFile internal constructor(
     }
 
     /**
-     * このファイルを読み取るバッファリング済みの `kotlinx.io.Source` を返す。
+     * Returns a buffered `kotlinx.io.Source` that reads from this file.
      */
     fun asSource(
         startOffset: Long = 0L,
@@ -349,10 +353,10 @@ class SmbFile internal constructor(
     ): Source = asRawSource(startOffset, closeFileOnClose).buffered()
 
     /**
-     * このファイルへ書き込む `kotlinx.io.RawSink` を返す。
+     * Returns a `kotlinx.io.RawSink` that writes to this file.
      *
-     * @param startOffset 書き込み開始オフセット（デフォルトは `0L`）
-     * @param closeFileOnClose `Sink.close()` 時にこの [SmbFile] ハンドルも閉じる場合は `true`
+     * @param startOffset Initial byte offset at which to start writing (defaults to `0L`).
+     * @param closeFileOnClose Whether closing the returned sink also closes this [SmbFile] handle.
      */
     fun asRawSink(
         startOffset: Long = 0L,
@@ -424,7 +428,7 @@ class SmbFile internal constructor(
     }
 
     /**
-     * このファイルへ書き込むバッファリング済みの `kotlinx.io.Sink` を返す。
+     * Returns a buffered `kotlinx.io.Sink` that writes to this file.
      */
     fun asSink(
         startOffset: Long = 0L,
@@ -432,7 +436,7 @@ class SmbFile internal constructor(
     ): Sink = asRawSink(startOffset, closeFileOnClose).buffered()
 
     /**
-     * ファイルハンドルをサーバー上で閉じる (`SMB2 CLOSE`)。
+     * Closes the file handle on the server (`SMB2 CLOSE`).
      */
     suspend fun closeSuspend() {
         if (closed) return

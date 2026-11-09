@@ -1,14 +1,18 @@
 package com.sorrowblue.kmcifs.client.protocol
 
 /**
- * SMB2 ファイルハンドル識別子 (Persistent 8 bytes + Volatile 8 bytes = 16 bytes)。
+ * 16-byte SMB2 file handle identifier (`[MS-SMB2] 2.2.14.1`), consisting of a
+ * 64-bit [persistent] handle and a 64-bit [volatile] handle.
  */
 data class SmbFileId(
     val persistent: ULong,
     val volatile: ULong,
 ) {
     companion object {
-        /** Compounded Related リクエストで直前の CREATE 結果を引き継ぐためのセンチネル FileId (`-1, -1`)。 */
+        /**
+         * Sentinel `FileId` (`0xFFFFFFFFFFFFFFFF`, `0xFFFFFFFFFFFFFFFF`) used in Compounded Related
+         * requests to reference the handle produced by a preceding `SMB2 CREATE` request (`[MS-SMB2] 3.2.4.1.4`).
+         */
         val COMPOUND_RELATED = SmbFileId(
             persistent = 0xFFFF_FFFF_FFFF_FFFFuL,
             volatile = 0xFFFF_FFFF_FFFF_FFFFuL,
@@ -17,7 +21,7 @@ data class SmbFileId(
 }
 
 /**
- * ファイル属性フラグ定数 (MS-FSCC 2.6)。
+ * File attribute bitmask constants (`[MS-FSCC] 2.6`).
  */
 object SmbFileAttributes {
     const val READONLY: UInt = 0x00000001u
@@ -31,7 +35,7 @@ object SmbFileAttributes {
 }
 
 /**
- * CREATE リクエストの DesiredAccess フラグ定数。
+ * `DesiredAccess` bitmask constants for `SMB2 CREATE` requests (`[MS-SMB2] 2.2.13.1`).
  */
 object SmbAccessMask {
     const val FILE_READ_DATA: UInt = 0x00000001u
@@ -59,10 +63,10 @@ object SmbAccessMask {
 }
 
 /**
- * CREATE リクエストの ShareAccess（共有排他モード）フラグ定数。
+ * `ShareAccess` (sharing mode) bitmask constants for `SMB2 CREATE` requests (`[MS-SMB2] 2.2.13`).
  */
 object SmbShareAccess {
-    /** 他のプロセスからの一切のオープンを拒否する（完全排他ロック）。 */
+    /** Denies all concurrent open requests from other handles (exclusive access). */
     const val EXCLUSIVE: UInt = 0x00000000u
     const val FILE_SHARE_READ: UInt = 0x00000001u
     const val FILE_SHARE_WRITE: UInt = 0x00000002u
@@ -71,25 +75,25 @@ object SmbShareAccess {
 }
 
 /**
- * CREATE リクエストの CreateDisposition 定数。
+ * `CreateDisposition` values for `SMB2 CREATE` requests (`[MS-SMB2] 2.2.13`).
  */
 enum class SmbCreateDisposition(val code: UInt) {
-    /** 既存があれば置き換え、なければ新規作成。 */
+    /** If the file already exists, supersede (replace) it; otherwise, create the file. */
     FILE_SUPERSEDE(0x00000000u),
-    /** 既存を開く。存在しなければ失敗。 */
+    /** If the file already exists, open it; otherwise, fail the request. */
     FILE_OPEN(0x00000001u),
-    /** 新規作成する。既に存在する場合は失敗。 */
+    /** If the file already exists, fail the request; otherwise, create the file. */
     FILE_CREATE(0x00000002u),
-    /** 既存があれば開き、なければ新規作成。 */
+    /** If the file already exists, open it; otherwise, create the file. */
     FILE_OPEN_IF(0x00000003u),
-    /** 既存を開いて上書き（サイズ0にトランケート）。存在しなければ失敗。 */
+    /** If the file already exists, open and overwrite (truncate) it; otherwise, fail the request. */
     FILE_OVERWRITE(0x00000004u),
-    /** 既存があれば上書き、なければ新規作成。 */
+    /** If the file already exists, open and overwrite (truncate) it; otherwise, create the file. */
     FILE_OVERWRITE_IF(0x00000005u),
 }
 
 /**
- * CREATE リクエストの CreateOptions フラグ定数。
+ * `CreateOptions` bitmask constants for `SMB2 CREATE` requests (`[MS-SMB2] 2.2.13`).
  */
 object SmbCreateOptions {
     const val FILE_DIRECTORY_FILE: UInt = 0x00000001u
@@ -102,7 +106,7 @@ object SmbCreateOptions {
 }
 
 /**
- * ディレクトリ一覧取得で返される各ファイル・フォルダのエントリ情報。
+ * Directory entry metadata returned by directory enumeration (`FileIdBothDirectoryInformation`).
  */
 data class SmbDirectoryEntry(
     val name: String,
@@ -126,7 +130,7 @@ data class SmbDirectoryEntry(
 }
 
 /**
- * 単一ファイルまたはディレクトリのメタデータ。
+ * Metadata for a single file or directory returned by `SMB2 CREATE` (`[SmbShare.stat]`).
  */
 data class SmbFileMetadata(
     val size: Long,
@@ -148,7 +152,7 @@ data class SmbFileMetadata(
 }
 
 /**
- * 共有フォルダの種類 (MS-SRVS 2.2.2.4)。
+ * Type of shared resource on an SMB server (`[MS-SRVS] 2.2.2.4`).
  */
 enum class SmbShareType(val code: UInt) {
     DISKTREE(0u),
@@ -171,7 +175,7 @@ enum class SmbShareType(val code: UInt) {
 }
 
 /**
- * サーバー上の共有フォルダ情報 (`NetrShareEnum` 結果)。
+ * Information about a shared folder enumerated via DCE/RPC `NetrShareEnum`.
  */
 data class SmbShareInfo(
     val name: String,

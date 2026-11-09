@@ -14,7 +14,7 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.withTimeout
 
 /**
- * Direct TCP (ポート 445) 上で 4 バイトのストリーム長プレフィックス付き SMB パケットを送受信するトランスポート抽象。
+ * Transport abstraction for sending and receiving SMB packets framed with a 4-byte stream length prefix over Direct TCP (port 445).
  */
 internal interface SmbPacketTransport {
     suspend fun sendPacket(packet: ByteArray)
@@ -23,7 +23,7 @@ internal interface SmbPacketTransport {
 }
 
 /**
- * `ktor-network` を用いたマルチプラットフォーム TCP ソケットトランスポート実装。
+ * Multiplatform TCP socket transport implementation backed by `ktor-network`.
  */
 internal class KtorTcpSmbTransport private constructor(
     private val selectorManager: SelectorManager,

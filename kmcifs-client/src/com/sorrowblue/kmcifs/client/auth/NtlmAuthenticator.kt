@@ -13,7 +13,7 @@ import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUShortLE
 import kotlin.random.Random
 
 /**
- * NTLMSSP (NTLMv2) 認証および SPNEGO (ASN.1 DER) ラッピングを処理するクラス。
+ * Handles NTLMSSP (NTLMv2) authentication and SPNEGO (ASN.1 DER) token wrapping (`[MS-NLMP]`).
  */
 internal object NtlmAuthenticator {
 
@@ -68,7 +68,7 @@ internal object NtlmAuthenticator {
     )
 
     /**
-     * NTLMSSP Type 1 (NEGOTIATE_MESSAGE) を生成する。
+     * Builds an NTLMSSP Type 1 (`NEGOTIATE_MESSAGE`) packet.
      */
     fun createType1Message(flags: UInt = DEFAULT_NEGOTIATE_FLAGS): ByteArray {
         val msg = ByteArray(40)
@@ -89,7 +89,7 @@ internal object NtlmAuthenticator {
     private val MECH_TYPE_LIST_DER = asn1Wrap(0x30, NTLMSSP_OID)
 
     /**
-     * Type 1 メッセージを SPNEGO negTokenInit (ASN.1 DER) でラップする。
+     * Wraps an NTLMSSP Type 1 message in a SPNEGO `negTokenInit` (ASN.1 DER) token.
      */
     fun wrapType1InSpnego(type1Message: ByteArray): ByteArray {
         val mechTypesField = asn1Wrap(0xA0, MECH_TYPE_LIST_DER)
@@ -102,7 +102,8 @@ internal object NtlmAuthenticator {
     }
 
     /**
-     * サーバーから受信したセキュリティブロブ (SPNEGO または生 NTLMSSP) から Type 2 (CHALLENGE_MESSAGE) を解析する。
+     * Parses an NTLMSSP Type 2 (`CHALLENGE_MESSAGE`) from the security blob (SPNEGO or raw NTLMSSP)
+     * received from the server.
      */
     fun parseType2Challenge(securityBlob: ByteArray): ChallengeInfo {
         val ntlmOffset = findNtlmsspOffset(securityBlob)
@@ -138,7 +139,7 @@ internal object NtlmAuthenticator {
     }
 
     /**
-     * NTLMv2 認証応答 (Type 3 AUTHENTICATE_MESSAGE) とセッション鍵を生成する。
+     * Generates an NTLMv2 Type 3 (`AUTHENTICATE_MESSAGE`) response and derives the exported session key.
      */
     fun createType3Authenticate(
         credentials: SmbCredentials,
@@ -256,7 +257,7 @@ internal object NtlmAuthenticator {
     }
 
     /**
-     * SPNEGO の `mechListMIC` フィールド用 NTLMv2 署名 (16 バイト, MS-NLMP 3.4.4.2) を計算する。
+     * Computes the 16-byte NTLMv2 signature (`[MS-NLMP] 3.4.4.2`) for the SPNEGO `mechListMIC` field.
      */
     private fun computeSpnegoMechListMic(exportedSessionKey: ByteArray, flags: UInt): ByteArray {
         val signMagic = "session key to client-to-server signing key magic constant\u0000".encodeToByteArray()
@@ -337,7 +338,7 @@ internal object NtlmAuthenticator {
     }
 
     /**
-     * Type 3 メッセージを SPNEGO negTokenResp (ASN.1 DER) でラップする。
+     * Wraps an NTLMSSP Type 3 message in a SPNEGO `negTokenResp` (ASN.1 DER) token.
      */
     fun wrapType3InSpnego(type3Message: ByteArray, mechListMic: ByteArray? = null): ByteArray {
         val responseTokenOctet = asn1Wrap(0x04, type3Message)

@@ -1,7 +1,7 @@
 package com.sorrowblue.kmcifs.client.protocol
 
 /**
- * SMB プロトコルで使用するリトルエンディアン形式のバイト操作と文字列変換ユーティリティ。
+ * Little-endian byte manipulation, UTF-16LE string conversion, and Windows `FILETIME` utilities used by the SMB protocol.
  */
 internal object ByteUtils {
 
@@ -44,7 +44,7 @@ internal object ByteUtils {
     }
 
     /**
-     * 文字列を UTF-16LE バイト配列にエンコードする。
+     * Encodes this string into a UTF-16LE [ByteArray].
      */
     fun String.encodeToUtf16LE(): ByteArray {
         val out = ByteArray(this.length * 2)
@@ -57,7 +57,7 @@ internal object ByteUtils {
     }
 
     /**
-     * UTF-16LE バイト配列の指定範囲を文字列にデコードする。
+     * Decodes a slice of a UTF-16LE [ByteArray] into a [String].
      */
     fun ByteArray.decodeFromUtf16LE(offset: Int = 0, byteLength: Int = this.size - offset): String {
         if (byteLength <= 0) return ""
@@ -73,8 +73,8 @@ internal object ByteUtils {
     }
 
     /**
-     * Windows FILETIME (1601-01-01 00:00:00 UTC からの 100 ナノ秒単位) を
-     * Unix エポックミリ秒 (1970-01-01 00:00:00 UTC からのミリ秒) に変換する。
+     * Converts a Windows `FILETIME` (100-nanosecond intervals since `1601-01-01 00:00:00 UTC`)
+     * to Unix epoch milliseconds (`1970-01-01 00:00:00 UTC`).
      */
     fun filetimeToEpochMillis(filetime: ULong): Long {
         if (filetime == 0uL) return 0L
@@ -87,7 +87,7 @@ internal object ByteUtils {
     }
 
     /**
-     * Unix エポックミリ秒を Windows FILETIME に変換する。
+     * Converts Unix epoch milliseconds to a Windows `FILETIME`.
      */
     fun epochMillisToFiletime(epochMillis: Long): ULong {
         if (epochMillis <= 0L) return 0uL

@@ -12,7 +12,7 @@ import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUShortLE
 import kotlin.random.Random
 
 /**
- * SMB2 / SMB3 各コマンドのリクエスト構築およびレスポンス解析。
+ * Request builders and response parsers for SMB2 and SMB3 protocol commands (`[MS-SMB2]`).
  */
 internal object SmbMessages {
 
@@ -624,8 +624,8 @@ internal object SmbMessages {
     }
 
     /**
-     * QUERY_DIRECTORY レスポンスからエントリ一覧を解析する。
-     * `STATUS_NO_MORE_FILES` または `STATUS_NO_SUCH_FILE` の場合は `null` を返す。
+     * Parses directory entries from an `SMB2 QUERY_DIRECTORY` response.
+     * Returns `null` when the server responds with `STATUS_NO_MORE_FILES` or `STATUS_NO_SUCH_FILE`.
      */
     fun parseQueryDirectoryResponse(packet: ByteArray, excludeDotEntries: Boolean = true): List<SmbDirectoryEntry>? {
         val header = SmbHeader.decode(packet)
@@ -749,9 +749,10 @@ internal object SmbMessages {
     }
 
     /**
-     * READ レスポンスのペイロードを呼び出し元の [destination] 配列へ直接コピーする（中間配列を生成しないゼロコピー版）。
+     * Copies the payload of an `SMB2 READ` response directly into the caller's [destination] array
+     * without allocating an intermediate byte array.
      *
-     * @return 実際にコピーされたバイト数（EOF の場合は `0`）
+     * @return Number of bytes copied, or `0` on `STATUS_END_OF_FILE`.
      */
     fun parseReadResponseInto(
         packet: ByteArray,
@@ -916,13 +917,13 @@ internal object SmbMessages {
     }
 
     /**
-     * `FileDispositionInformation` (Class 13): ファイルまたは空ディレクトリの削除フラグ。
+     * `FileDispositionInformation` (Class 13): payload for marking a file or empty directory for deletion on close.
      */
     fun buildFileDispositionPayload(deletePending: Boolean = true): ByteArray =
         byteArrayOf(if (deletePending) 1 else 0)
 
     /**
-     * `FileRenameInformation` (Class 10): ファイルまたはディレクトリのリネーム・移動。
+     * `FileRenameInformation` (Class 10): payload for renaming or moving a file or directory.
      */
     fun buildFileRenamePayload(newTargetPath: String, replaceIfExists: Boolean = true): ByteArray {
         val normalized = newTargetPath.trim('/', '\\').replace('/', '\\')
@@ -936,7 +937,7 @@ internal object SmbMessages {
     }
 
     /**
-     * `FileEndOfFileInformation` (Class 20): ファイルサイズの変更・トランケート。
+     * `FileEndOfFileInformation` (Class 20): payload for truncating or extending a file's logical size.
      */
     fun buildFileEndOfFilePayload(newSize: Long): ByteArray {
         val buf = ByteArray(8)
@@ -1011,8 +1012,8 @@ internal object SmbMessages {
     // =========================================================================
 
     /**
-     * 複数の関連する SMB2 リクエスト (`[CREATE, CLOSE]` など) を 8 バイト境界でアライン・連結し、
-     * 2番目以降に `SMB2_FLAGS_RELATED_OPERATIONS` と各 `NextCommand` オフセットを設定した単一パケットを構築する。
+     * Aligns and concatenates multiple related SMB2 requests (such as `[CREATE, CLOSE]`) on 8-byte boundaries,
+     * setting `SMB2_FLAGS_RELATED_OPERATIONS` on subsequent requests and populating each `NextCommand` offset.
      */
     fun buildCompoundRelatedPacket(
         requests: List<ByteArray>,
@@ -1059,8 +1060,8 @@ internal object SmbMessages {
     }
 
     /**
-     * 受信した SMB2 パケットに複数の Compound レスポンスが含まれている場合、`NextCommand` オフセットに沿って個別のレスポンス配列へ分割する。
-     * 署名検証で送信時のヘッダ値を維持できるよう、各分割済みスライスのヘッダフィールドはそのまま保持される。
+     * Splits a compounded SMB2 packet into individual response slices along `NextCommand` offsets,
+     * preserving original header fields in each slice so cryptographic signatures remain valid during verification.
      */
     fun splitCompoundPacket(packet: ByteArray): List<ByteArray> {
         if (packet.size < SmbHeader.SIZE) return listOf(packet)

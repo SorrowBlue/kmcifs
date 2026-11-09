@@ -10,7 +10,7 @@ import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeULongLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUShortLE
 
 /**
- * SMB2 / SMB3 コマンドコード。
+ * SMB2/SMB3 command codes (`[MS-SMB2] 2.2.1`).
  */
 enum class SmbCommand(val code: UShort) {
     NEGOTIATE(0x0000u),
@@ -39,7 +39,7 @@ enum class SmbCommand(val code: UShort) {
 }
 
 /**
- * 64 バイト固定長の SMB2 パケットヘッダ。
+ * Fixed 64-byte SMB2 packet header (`[MS-SMB2] 2.2.1`).
  */
 internal data class SmbHeader(
     val creditCharge: UShort = 1u,
@@ -153,9 +153,9 @@ internal data class SmbHeader(
         }
 
         /**
-         * SMB パケット（ヘッダ + ボディ）の署名フィールド (offset 48..63) を計算して書き込む。
-         * - SMB 2.0.2 / 2.1: HMAC-SHA256 の先頭 16 バイト
-         * - SMB 3.x: AES-128-CMAC (16 バイト)
+         * Computes and writes the 16-byte signature field (`offset 48..63`) of an SMB packet (header + body):
+         * - SMB 2.0.2 / 2.1: first 16 bytes of `HMAC-SHA256`
+         * - SMB 3.x: `AES-128-CMAC` (16 bytes)
          */
         fun signPacket(packet: ByteArray, dialect: SmbDialect, signingKey: ByteArray) {
             val currentFlags = packet.readUIntLE(16)
@@ -168,7 +168,7 @@ internal data class SmbHeader(
         }
 
         /**
-         * 受信した SMB パケットの署名を検証する。
+         * Verifies the cryptographic signature of a received SMB packet.
          */
         fun verifyPacketSignature(packet: ByteArray, dialect: SmbDialect, signingKey: ByteArray): Boolean {
             val receivedSig = packet.copyOfRange(48, 64)

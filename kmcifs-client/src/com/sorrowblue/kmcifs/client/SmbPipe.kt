@@ -12,7 +12,7 @@ import com.sorrowblue.kmcifs.client.protocol.SmbShareAccess
 import kotlinx.coroutines.runBlocking
 
 /**
- * `IPC$` 共有（名前付きパイプ用ツリー接続）を表すクラス。
+ * Represents a tree connection to the `IPC$` share for named pipe operations.
  */
 class SmbPipeShare internal constructor(
     val client: SmbClient,
@@ -27,7 +27,7 @@ class SmbPipeShare internal constructor(
         get() = disconnected || client.isClosed
 
     /**
-     * 指定した名前のパイプ（例: `"srvsvc"`, `"wkssvc"`）を開く。
+     * Opens a named pipe by name (for example, `"srvsvc"` or `"wkssvc"`).
      */
     suspend fun openPipe(pipeName: String): SmbNamedPipe {
         if (disconnected) {
@@ -86,7 +86,7 @@ class SmbPipeShare internal constructor(
 }
 
 /**
- * オープン済みの SMB 名前付きパイプハンドルを表すクラス。
+ * Represents an open handle to an SMB named pipe.
  */
 class SmbNamedPipe internal constructor(
     val pipeShare: SmbPipeShare,
@@ -107,7 +107,8 @@ class SmbNamedPipe internal constructor(
     }
 
     /**
-     * `FSCTL_PIPE_TRANSCEIVE` (`SMB2 IOCTL`) を使用して、パイプへの書き込みと応答の読み取りを 1 往復で実行する。
+     * Performs a combined write and read transaction on the named pipe in a single round-trip
+     * using `FSCTL_PIPE_TRANSCEIVE` (`SMB2 IOCTL`).
      */
     suspend fun transceive(input: ByteArray, maxOutputLength: Int = 65536): ByteArray {
         ensureOpen()
@@ -126,7 +127,7 @@ class SmbNamedPipe internal constructor(
     }
 
     /**
-     * パイプへデータを書き込む (`SMB2 WRITE`)。
+     * Writes data to the named pipe (`SMB2 WRITE`).
      */
     suspend fun write(data: ByteArray): Int {
         ensureOpen()
@@ -155,7 +156,7 @@ class SmbNamedPipe internal constructor(
     }
 
     /**
-     * パイプからデータを読み取る (`SMB2 READ`)。
+     * Reads data from the named pipe (`SMB2 READ`).
      */
     suspend fun read(maxLength: Int = 4280): ByteArray {
         ensureOpen()

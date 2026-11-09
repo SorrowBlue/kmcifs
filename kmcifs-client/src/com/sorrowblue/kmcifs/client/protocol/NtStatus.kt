@@ -1,7 +1,7 @@
 package com.sorrowblue.kmcifs.client.protocol
 
 /**
- * SMB2 / SMB3 ヘッダで返される主要な NTSTATUS コード定数。
+ * Common `NTSTATUS` status codes returned in SMB2/SMB3 headers (`[MS-ERREF] 2.3`).
  */
 object NtStatus {
     const val STATUS_SUCCESS: UInt = 0x00000000u
@@ -45,6 +45,7 @@ object NtStatus {
     const val STATUS_NETWORK_NAME_DELETED: UInt = 0xC00000C9u
     const val STATUS_ACCESS_DISABLED_BY_POLICY_OTHER: UInt = 0xC0000364u
 
+    /** Returns the symbolic name for a known [status] code, or its hexadecimal string representation. */
     fun nameOf(status: UInt): String = when (status) {
         STATUS_SUCCESS -> "STATUS_SUCCESS"
         STATUS_PENDING -> "STATUS_PENDING"
@@ -73,7 +74,9 @@ object NtStatus {
 }
 
 /**
- * SMB 操作の失敗を表す例外。
+ * Exception thrown when an SMB protocol operation fails.
+ *
+ * @property ntStatus 32-bit `NTSTATUS` code returned by the server or generated locally (`[NtStatus]`).
  */
 class SmbException(
     val ntStatus: UInt,

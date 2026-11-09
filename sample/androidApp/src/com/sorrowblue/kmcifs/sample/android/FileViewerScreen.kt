@@ -75,7 +75,7 @@ import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.util.VLCVideoLayout
 
 /**
- * 選択されたリモートファイル（テキスト・画像・動画）の中身を表示するビューア画面。
+ * Viewer screen that displays the contents of a selected remote SMB file (text, image, or video).
  */
 @Composable
 fun FileViewerScreen(
@@ -379,12 +379,13 @@ private fun ImageFilePreviewContent(
 }
 
 /**
- * LibVLC ([LibVLC] / [MediaPlayer]) とローカルループバック HTTP Range ストリームサーバー ([SmbHttpRangeServer])、
- * および [SmbRandomAccessStream] のマルチブロックキャッシュ＋非同期先読みを組み合わせ、
- * OpenDML 大容量 `.avi`（9.6GB 等）や DTS / AC-3 音声を含む動画ファイルを即座に SMB ストリーミング再生するコンポーネント。
+ * Streams video files (including large OpenDML `.avi` files and DTS/AC-3 audio tracks) over SMB
+ * by combining [LibVLC] / [MediaPlayer] with the local loopback HTTP Range server ([SmbHttpRangeServer])
+ * and the multi-block LRU cache + asynchronous prefetcher in [SmbRandomAccessStream].
  *
- * `fd://` ではなく `http://127.0.0.1` で LibVLC に渡すことで、VLC の `STREAM_CAN_FASTSEEK` を `false`（ネットワークストリーム扱い）にし、
- * 再生開始前に 9.6GB 全体の `AVIX` / `idx1` インデックス（数十MB〜）を全スキャンしてしまう現象を防いで即座に再生を開始させる。
+ * Serving the stream via `http://127.0.0.1` instead of `fd://` keeps VLC's `STREAM_CAN_FASTSEEK` disabled
+ * (treating it as a network stream), avoiding a full scan of multi-gigabyte `AVIX` / `idx1` indices before
+ * playback starts.
  */
 @Composable
 private fun VideoFilePreviewContent(

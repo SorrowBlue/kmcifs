@@ -101,7 +101,7 @@ fun MainViewController(): UIViewController = ComposeUIViewController {
 }
 
 /**
- * iOS デバイス上で AES-128-GCM を用いて接続情報を暗号化保存するストア。
+ * Persists encrypted SMB connection settings on iOS using AES-128-GCM.
  */
 private object IosEncryptedConnectionStore {
     private const val KEY_DEVICE_SECRET = "kmcifs.ios.sample.secret_key"

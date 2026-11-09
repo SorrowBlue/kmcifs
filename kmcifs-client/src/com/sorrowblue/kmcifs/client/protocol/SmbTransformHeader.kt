@@ -10,7 +10,7 @@ import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUShortLE
 import kotlin.random.Random
 
 /**
- * SMB 3.x の暗号化通信で使用される 52 バイトの SMB2_TRANSFORM_HEADER (`0xFD 'S' 'M' 'B'`)。
+ * 52-byte `SMB2_TRANSFORM_HEADER` (`0xFD 'S' 'M' 'B'`) used for encrypted SMB 3.x traffic (`[MS-SMB2] 2.2.41`).
  */
 internal object SmbTransformHeader {
 
@@ -26,7 +26,7 @@ internal object SmbTransformHeader {
     }
 
     /**
-     * 平文の SMB2 パケットを SMB3 Transform Header でラップして AEAD 暗号化する。
+     * Wraps and AEAD-encrypts a plaintext SMB2 packet with an SMB3 Transform Header.
      */
     fun encryptPacket(
         plainSmbPacket: ByteArray,
@@ -72,7 +72,7 @@ internal object SmbTransformHeader {
     }
 
     /**
-     * SMB3 Transform Header 付きパケットを復号・認証検証し、平文の SMB2 パケットを取り出す。
+     * Decrypts and authenticates an SMB3 Transform Header packet and returns the inner plaintext SMB2 packet.
      */
     fun decryptPacket(
         transformPacket: ByteArray,
