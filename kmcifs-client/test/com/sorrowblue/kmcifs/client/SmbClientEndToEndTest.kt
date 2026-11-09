@@ -9,6 +9,8 @@ import com.sorrowblue.kmcifs.client.crypto.Sha512
 import com.sorrowblue.kmcifs.client.crypto.Smb3Kdf
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.decodeFromUtf16LE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.encodeToUtf16LE
+import com.sorrowblue.kmcifs.client.protocol.ByteUtils.epochMillisToFiletime
+import com.sorrowblue.kmcifs.client.protocol.ByteUtils.filetimeToEpochMillis
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readUIntLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readULongLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readUShortLE
@@ -17,8 +19,10 @@ import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeULongLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUShortLE
 import com.sorrowblue.kmcifs.client.protocol.DceRpcSrvSvc
 import com.sorrowblue.kmcifs.client.protocol.NtStatus
+import com.sorrowblue.kmcifs.client.protocol.SmbAccessMask
 import com.sorrowblue.kmcifs.client.protocol.SmbCipherId
 import com.sorrowblue.kmcifs.client.protocol.SmbCommand
+import com.sorrowblue.kmcifs.client.protocol.SmbCreateDisposition
 import com.sorrowblue.kmcifs.client.protocol.SmbCreateOptions
 import com.sorrowblue.kmcifs.client.protocol.SmbDialect
 import com.sorrowblue.kmcifs.client.protocol.SmbException
@@ -28,14 +32,25 @@ import com.sorrowblue.kmcifs.client.protocol.SmbMessages
 import com.sorrowblue.kmcifs.client.protocol.SmbPacketTransport
 import com.sorrowblue.kmcifs.client.protocol.SmbShareType
 import com.sorrowblue.kmcifs.client.protocol.SmbTransformHeader
+import io.ktor.network.selector.SelectorManager
+import io.ktor.network.sockets.InetSocketAddress
+import io.ktor.network.sockets.aSocket
+import io.ktor.network.sockets.openReadChannel
+import io.ktor.network.sockets.openWriteChannel
+import io.ktor.utils.io.readFully
+import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.io.readByteArray
 import kotlinx.io.readString
 import kotlinx.io.writeString
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -607,13 +622,583 @@ class SmbClientEndToEndTest {
         encClient.close()
     }
 
+    @Test
+    fun testSmb202AndSmb302DialectsCcmAndAnonymousGuestSessions() = runTest {
+        val creds = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
+
+        // 1. SMB 2.0.2 with HMAC-SHA256 signing, CreditCharge=0, and NTLMv2 Timestamp + MsvAvFlags MIC calculation
+        val smb202Transport = MockSmb3ServerTransport(
+            expectedCredentials = creds,
+            dialect = SmbDialect.SMB_2_0_2,
+            encryptShare = false,
+            includeTimestampInChallenge = true,
+        )
+        val smb202Client = SmbClient(
+            host = "192.168.1.10",
+            port = 445,
+            config = SmbConfig(
+                dialects = listOf(SmbDialect.SMB_2_0_2),
+                encryptionPolicy = SmbEncryptionPolicy.DISABLED,
+                alwaysSign = true,
+                verifyServerSignatures = true,
+            ),
+            transport = smb202Transport,
+        )
+        smb202Client.initializeSession(creds)
+        assertEquals(SmbDialect.SMB_2_0_2, smb202Client.negotiatedDialect)
+        assertEquals(null, smb202Client.negotiatedCipher)
+        assertFalse(smb202Client.isSessionEncrypted)
+
+        val smb202Share = smb202Client.connectShare("PublicDocs")
+        smb202Share.writeText("notes/smb202.txt", "SMB 2.0.2 HMAC-SHA256 Signed!")
+        assertEquals("SMB 2.0.2 HMAC-SHA256 Signed!", smb202Share.readText("notes/smb202.txt"))
+
+        // Signature stripping / corruption detection on SMB 2.0.2 (Compound stat and single-command openFile)
+        smb202Transport.stripServerSignatureOnNextResponse = true
+        val missingSigEx = assertFailsWith<SmbException> {
+            smb202Share.stat("notes/smb202.txt")
+        }
+        assertEquals(NtStatus.STATUS_ACCESS_DENIED, missingSigEx.ntStatus)
+
+        smb202Transport.corruptServerSignatureOnNextResponse = true
+        val badSigEx = assertFailsWith<SmbException> {
+            smb202Share.stat("notes/smb202.txt")
+        }
+        assertEquals(NtStatus.STATUS_ACCESS_DENIED, badSigEx.ntStatus)
+
+        smb202Transport.stripServerSignatureOnNextResponse = true
+        val singleMissingSigEx = assertFailsWith<SmbException> {
+            smb202Share.openFile("notes/smb202.txt")
+        }
+        assertEquals(NtStatus.STATUS_ACCESS_DENIED, singleMissingSigEx.ntStatus)
+
+        smb202Transport.corruptServerSignatureOnNextResponse = true
+        val singleBadSigEx = assertFailsWith<SmbException> {
+            smb202Share.openFile("notes/smb202.txt")
+        }
+        assertEquals(NtStatus.STATUS_ACCESS_DENIED, singleBadSigEx.ntStatus)
+
+        smb202Share.closeSuspend()
+        smb202Client.closeSuspend()
+
+        // 1b. SMB 3.1.1 default signing policy (alwaysSign = false, serverSigningRequired = false):
+        //     Only TREE_CONNECT is signed by the client; READ/WRITE omit unnecessary CMAC computation
+        val selectiveSignTransport = MockSmb3ServerTransport(
+            expectedCredentials = creds,
+            dialect = SmbDialect.SMB_3_1_1,
+            encryptShare = false,
+        )
+        val selectiveSignClient = SmbClient(
+            host = "192.168.1.10",
+            port = 445,
+            config = SmbConfig(
+                encryptionPolicy = SmbEncryptionPolicy.DISABLED,
+                alwaysSign = false,
+                verifyServerSignatures = true,
+            ),
+            transport = selectiveSignTransport,
+        )
+        selectiveSignClient.initializeSession(creds)
+        val selectiveShare = selectiveSignClient.connectShare("PublicDocs")
+        selectiveShare.writeText("notes/selective.txt", "Selective TREE_CONNECT signing")
+        assertEquals("Selective TREE_CONNECT signing", selectiveShare.readText("notes/selective.txt"))
+        assertEquals(listOf(SmbCommand.TREE_CONNECT), selectiveSignTransport.signedRequestCommands)
+        selectiveShare.closeSuspend()
+        selectiveSignClient.closeSuspend()
+
+        // 2. SMB 3.0.2 with AES-128-CCM Transform Header encryption and SP800-108 SMB 3.0/3.0.2 KDF labels
+        val smb302Transport = MockSmb3ServerTransport(
+            expectedCredentials = creds,
+            dialect = SmbDialect.SMB_3_0_2,
+            cipherId = SmbCipherId.AES_128_CCM,
+            encryptShare = true,
+        )
+        val smb302Client = SmbClient(
+            host = "192.168.1.10",
+            port = 445,
+            config = SmbConfig(
+                dialects = listOf(SmbDialect.SMB_3_0_2),
+                ciphers = listOf(SmbCipherId.AES_128_CCM),
+                encryptionPolicy = SmbEncryptionPolicy.REQUIRED,
+            ),
+            transport = smb302Transport,
+        )
+        smb302Client.initializeSession(creds)
+        assertEquals(SmbDialect.SMB_3_0_2, smb302Client.negotiatedDialect)
+        assertEquals(SmbCipherId.AES_128_CCM, smb302Client.negotiatedCipher)
+        assertTrue(smb302Client.isSessionEncrypted)
+
+        val smb302Share = smb302Client.connectShare("PublicDocs")
+        smb302Share.writeText("notes/smb302.txt", "SMB 3.0.2 AES-128-CCM Encrypted!")
+        assertEquals("SMB 3.0.2 AES-128-CCM Encrypted!", smb302Share.readText("notes/smb302.txt"))
+        smb302Share.closeSuspend()
+        smb302Client.closeSuspend()
+        assertTrue(smb302Transport.encryptedPacketsCount >= 4)
+
+        // 3. Anonymous 1-step login & Guest 2-step login (and REQUIRED encryption rejection on anonymous)
+        val anonImmediateTransport = MockSmb3ServerTransport(
+            expectedCredentials = SmbCredentials.Anonymous,
+            encryptShare = false,
+            immediateAnonymousSuccess = true,
+        )
+        val anonClient = SmbClient(
+            host = "192.168.1.10",
+            port = 445,
+            config = SmbConfig(encryptionPolicy = SmbEncryptionPolicy.NEGOTIATE),
+            transport = anonImmediateTransport,
+        )
+        anonClient.initializeSession(SmbCredentials.Anonymous)
+        val anonShare = anonClient.connectShare("PublicDocs")
+        anonShare.writeText("notes/anon.txt", "Anonymous 1-step")
+        assertEquals("Anonymous 1-step", anonShare.readText("notes/anon.txt"))
+        anonShare.closeSuspend()
+        anonClient.closeSuspend()
+
+        val anonRequiredEx = assertFailsWith<SmbException> {
+            val c = SmbClient(
+                host = "192.168.1.10",
+                port = 445,
+                config = SmbConfig(encryptionPolicy = SmbEncryptionPolicy.REQUIRED),
+                transport = MockSmb3ServerTransport(
+                    expectedCredentials = SmbCredentials.Anonymous,
+                    encryptShare = false,
+                    immediateAnonymousSuccess = true,
+                ),
+            )
+            c.initializeSession(SmbCredentials.Anonymous)
+        }
+        assertEquals(NtStatus.STATUS_NOT_SUPPORTED, anonRequiredEx.ntStatus)
+
+        // 2-step Anonymous & Guest session flag
+        val guestTransport = MockSmb3ServerTransport(
+            expectedCredentials = SmbCredentials.Anonymous,
+            encryptShare = false,
+            returnGuestSessionFlag = true,
+        )
+        val guestClient = SmbClient(
+            host = "192.168.1.10",
+            port = 445,
+            config = SmbConfig(encryptionPolicy = SmbEncryptionPolicy.NEGOTIATE, alwaysSign = true),
+            transport = guestTransport,
+        )
+        guestClient.initializeSession(SmbCredentials.Anonymous)
+        val guestShare = guestClient.connectShare("PublicDocs")
+        guestShare.writeText("notes/guest.txt", "Guest 2-step")
+        assertEquals("Guest 2-step", guestShare.readText("notes/guest.txt"))
+        guestShare.closeSuspend()
+        guestClient.closeSuspend()
+    }
+
+    @Test
+    fun testAsyncInterimPendingAndMultiFragmentDceRpcAndPipeOperations() = runTest {
+        val creds = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
+        val mockTransport = MockSmb3ServerTransport(
+            expectedCredentials = creds,
+            encryptShare = false,
+            injectPendingAndNotifications = true,
+            multiFragmentRpcResponse = true,
+        )
+        val client = SmbClient("192.168.1.10", 445, SmbConfig(encryptionPolicy = SmbEncryptionPolicy.DISABLED), mockTransport)
+        client.initializeSession(creds)
+
+        // 1. Multi-fragment DCE/RPC response (2 PDUs) with hidden & varied share types
+        val visibleShares = client.listShares(includeHidden = false)
+        assertEquals(3, visibleShares.size)
+        val allShares = client.listShares(includeHidden = true)
+        assertEquals(5, allShares.size)
+        assertEquals(SmbShareType.DISKTREE, allShares[0].type)
+        assertEquals(SmbShareType.PRINTQ, allShares[1].type)
+        assertEquals(SmbShareType.DEVICE, allShares[2].type)
+        assertEquals(SmbShareType.IPC, allShares[3].type)
+        assertTrue(allShares[3].isSpecialOrHidden)
+        assertEquals(SmbShareType.UNKNOWN, allShares[4].type)
+        assertTrue(allShares[4].isSpecialOrHidden)
+
+        // 2. Direct IPC$ SmbPipeShare & SmbNamedPipe write / read / close lifecycle
+        val ipc = client.connectIpcShare()
+        assertFalse(ipc.isClosed)
+        val pipe = ipc.openPipe("\\pipe\\wkssvc")
+        assertEquals("wkssvc", pipe.pipeName)
+        assertFalse(pipe.isClosed)
+        assertEquals(0, pipe.write(ByteArray(0)))
+        val written = pipe.write("RPC_PING".encodeToByteArray())
+        assertEquals(8, written)
+        assertEquals(0, pipe.read(0).size)
+        val pipeRead = pipe.read(64)
+        assertEquals("RPC_PING", pipeRead.decodeToString())
+        pipe.close()
+        assertTrue(pipe.isClosed)
+        assertFailsWith<SmbException> {
+            pipe.write("AFTER_CLOSE".encodeToByteArray())
+        }
+        ipc.close()
+        assertTrue(ipc.isClosed)
+        assertFailsWith<SmbException> {
+            ipc.openPipe("srvsvc")
+        }
+
+        // 3. Compound request with injected interim STATUS_PENDING, unsolicited OPLOCK_BREAK, and stale MessageId
+        val share = client.connectShare("PublicDocs")
+        share.writeText("notes/async.txt", "Async pending handled!")
+        assertTrue(share.exists("notes/async.txt"))
+        assertEquals("Async pending handled!", share.readText("notes/async.txt"))
+        share.closeSuspend()
+        client.closeSuspend()
+    }
+
+    @Test
+    fun testRandomAccessFileAllPrimitivesModesAndBuffering() = runTest {
+        val creds = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
+        val mockTransport = MockSmb3ServerTransport(creds, encryptShare = false)
+        val client = SmbClient("192.168.1.10", 445, SmbConfig(encryptionPolicy = SmbEncryptionPolicy.DISABLED), mockTransport)
+        client.initializeSession(creds)
+        val share = client.connectShare("PublicDocs")
+
+        assertFailsWith<IllegalArgumentException> {
+            SmbRandomAccessMode.fromModeString("invalid")
+        }
+        assertEquals(SmbRandomAccessMode.READ_WRITE_SYNC, SmbRandomAccessMode.fromModeString("rws"))
+        assertEquals(SmbRandomAccessMode.READ_WRITE_DSYNC, SmbRandomAccessMode.fromModeString("rwd"))
+
+        // Open using SmbRandomAccessMode enum overload ("rws")
+        share.openRandomAccessFile("data/primitives.bin", SmbRandomAccessMode.READ_WRITE_SYNC, bufferSize = 8).use { raf ->
+            raf.writeBoolean(true)
+            raf.writeBoolean(false)
+            raf.writeShort(0x1234)
+            raf.writeShort(0xFF80)
+            raf.write(0xAB)
+            raf.write(ByteArray(0), 0, 0)
+            raf.flush()
+
+            assertEquals(7L, raf.length)
+            assertFalse(raf.metadata.isDirectory)
+
+            raf.seek(0L)
+            assertTrue(raf.readBoolean())
+            assertFalse(raf.readBoolean())
+            assertEquals(0x1234.toShort(), raf.readShort())
+            assertEquals(0xFF80, raf.readUnsignedShort())
+            assertEquals(0xAB, raf.readUnsignedByte())
+            assertEquals(-1, raf.read())
+            assertFailsWith<SmbEndOfFileException> {
+                raf.readUnsignedByte()
+            }
+
+            // skipBytes and readBytes
+            raf.seek(0L)
+            assertEquals(0, raf.skipBytes(0))
+            assertEquals(0, raf.skipBytes(-5))
+            assertEquals(2, raf.skipBytes(2))
+            assertEquals(2L, raf.position)
+            assertEquals(0, raf.readBytes(0).size)
+            val twoBytes = raf.readBytes(2)
+            assertContentEquals(byteArrayOf(0x12, 0x34), twoBytes)
+            // Requesting 10 bytes when only 3 remain
+            val tailBytes = raf.readBytes(10)
+            assertEquals(3, tailBytes.size)
+            assertEquals(0, raf.skipBytes(5))
+            assertEquals(0, raf.readBytes(4).size)
+        }
+
+        // Buffered read-ahead & cache invalidation on write + toRandomAccessFile wrapper
+        share.writeBytes("data/buffered.bin", ByteArray(24) { (it + 1).toByte() })
+        val rawFile = share.openFile("data/buffered.bin", desiredAccess = SmbAccessMask.WRITE_DEFAULT)
+        rawFile.toRandomAccessFile(path = "data/buffered.bin", mode = SmbRandomAccessMode.READ_WRITE_DSYNC, bufferSize = 8).use { bRaf ->
+            // Fill 8-byte buffer at offset 0..7 and hit fast path
+            assertEquals(1, bRaf.read())
+            assertEquals(2, bRaf.read())
+            val smallSlice = ByteArray(4)
+            assertEquals(4, bRaf.read(smallSlice))
+            assertContentEquals(byteArrayOf(3, 4, 5, 6), smallSlice)
+
+            // Cross buffer boundary: 2 bytes left in buffer (7, 8) + 10 bytes >= bufferSize (direct zero-copy read)
+            val crossLarge = ByteArray(12)
+            assertEquals(12, bRaf.read(crossLarge))
+            assertContentEquals(ByteArray(12) { (it + 7).toByte() }, crossLarge)
+
+            // Cross buffer boundary with small remainder (< bufferSize): refill buffer path
+            bRaf.seek(0L)
+            assertEquals(1, bRaf.read()) // populates buffer 0..7
+            bRaf.seek(6L)
+            val crossSmall = ByteArray(5) // 2 bytes from buffer (7, 8) + 3 bytes refilled (9, 10, 11)
+            assertEquals(5, bRaf.read(crossSmall))
+            assertContentEquals(byteArrayOf(7, 8, 9, 10, 11), crossSmall)
+
+            // Write invalidates buffer so subsequent read sees updated byte
+            bRaf.seek(8L)
+            bRaf.writeByte(0x77)
+            bRaf.seek(8L)
+            assertEquals(0x77, bRaf.readUnsignedByte())
+        }
+
+        share.closeSuspend()
+        client.closeSuspend()
+    }
+
+    @Test
+    fun testLargeChunkedIoAndMultiBatchDirectoryAndProtocolModels() = runTest {
+        val creds = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
+        val mockTransport = MockSmb3ServerTransport(
+            expectedCredentials = creds,
+            encryptShare = false,
+            maxReadWriteSize = 4096u,
+            multiBatchDirectoryQuery = true,
+        )
+        val client = SmbClient("192.168.1.10", 445, SmbConfig(encryptionPolicy = SmbEncryptionPolicy.DISABLED), mockTransport)
+        client.initializeSession(creds)
+        assertEquals(4096, client.maxReadSize)
+        assertEquals(4096, client.maxWriteSize)
+        assertEquals(4096, client.maxTransactSize)
+
+        val share = client.connectShare("PublicDocs")
+
+        // 1. Write & read 70KB (> 64KB segment buffer and > 4KB SMB MaxWriteSize/MaxReadSize) with closeFileOnClose = false
+        val largePayload = ByteArray(70_000) { idx -> ((idx * 13 + 7) and 0xFF).toByte() }
+        val file = share.openFile(
+            path = "streams/large.bin",
+            desiredAccess = SmbAccessMask.WRITE_DEFAULT,
+            createDisposition = SmbCreateDisposition.FILE_OVERWRITE_IF,
+        )
+        file.asSink(startOffset = 0L, closeFileOnClose = false).use { sink ->
+            sink.write(largePayload)
+            sink.flush()
+        }
+        assertFalse(file.isClosed)
+        assertEquals(70_000L, file.size)
+
+        val readBack = file.asSource(startOffset = 0L, closeFileOnClose = false).use { source ->
+            source.readByteArray()
+        }
+        assertFalse(file.isClosed)
+        assertContentEquals(largePayload, readBack)
+
+        // Direct chunked file.read(offset, length) > maxChunk
+        val directRead = file.read(0L, 10_000)
+        assertContentEquals(largePayload.copyOfRange(0, 10_000), directRead)
+        assertEquals(0, file.read(0L, 0).size)
+        assertEquals(0, file.readInto(0L, ByteArray(4), 0, 0))
+        assertEquals(0, file.write(0L, ByteArray(0)))
+
+        // Shared lock without failImmediately
+        file.lock(offset = 0L, length = 100L, exclusive = false, failImmediately = false)
+        file.unlock(offset = 0L, length = 100L)
+        file.close()
+        assertTrue(file.isClosed)
+
+        // 2. appendBytes, writeBytes(overwrite = false), openSink(overwrite = false), deleteDirectory, deleteRecursively on single file
+        share.writeBytes("notes/new_only.txt", "Part1".encodeToByteArray(), overwrite = false)
+        val fileCollisionEx = assertFailsWith<SmbException> {
+            share.writeBytes("notes/new_only.txt", "Duplicate".encodeToByteArray(), overwrite = false)
+        }
+        assertEquals(NtStatus.STATUS_OBJECT_NAME_COLLISION, fileCollisionEx.ntStatus)
+        share.appendBytes("notes/new_only.txt", "-Part2".encodeToByteArray())
+        assertEquals("Part1-Part2", share.readText("notes/new_only.txt"))
+        share.deleteRecursively("notes/new_only.txt")
+        assertFalse(share.exists("notes/new_only.txt"))
+        // deleteRecursively on non-existent path returns cleanly
+        share.deleteRecursively("notes/does_not_exist.txt")
+
+        share.openSink("notes/sink_create.txt", append = false, overwrite = false).use { sink ->
+            sink.writeString("Created via Sink")
+        }
+        val sinkCollisionEx = assertFailsWith<SmbException> {
+            share.openSink("notes/sink_create.txt", append = false, overwrite = false)
+        }
+        assertEquals(NtStatus.STATUS_OBJECT_NAME_COLLISION, sinkCollisionEx.ntStatus)
+        assertEquals("Created via Sink", share.readText("notes/sink_create.txt"))
+
+        share.createDirectory("empty_dir")
+        val dirCollisionEx = assertFailsWith<SmbException> {
+            share.createDirectory("empty_dir")
+        }
+        assertEquals(NtStatus.STATUS_OBJECT_NAME_COLLISION, dirCollisionEx.ntStatus)
+        share.deleteDirectory("empty_dir")
+        assertFalse(share.exists("empty_dir"))
+
+        // 3. Multi-batch directory listing (1 entry per QUERY_DIRECTORY response before STATUS_NO_MORE_FILES)
+        share.writeText("notes/second_batch.txt", "Second batch entry")
+        val entries = share.listDirectory("notes")
+        assertEquals(2, entries.size)
+        assertEquals(setOf("sink_create.txt", "second_batch.txt"), entries.map { it.name }.toSet())
+        val firstEntry = entries.first()
+        assertFalse(firstEntry.isDirectory)
+        assertFalse(firstEntry.isReadOnly)
+        assertFalse(firstEntry.isHidden)
+
+        // 4. ByteUtils FILETIME round-trip & NtStatus.nameOf coverage
+        assertEquals(0L, filetimeToEpochMillis(0uL))
+        assertEquals(0L, filetimeToEpochMillis(100uL))
+        assertEquals(0uL, epochMillisToFiletime(0L))
+        val nowMillis = 1700000000000L
+        assertEquals(nowMillis, filetimeToEpochMillis(epochMillisToFiletime(nowMillis)))
+
+        val knownStatuses = listOf(
+            NtStatus.STATUS_SUCCESS,
+            NtStatus.STATUS_PENDING,
+            NtStatus.STATUS_BUFFER_OVERFLOW,
+            NtStatus.STATUS_NO_MORE_FILES,
+            NtStatus.STATUS_INVALID_PARAMETER,
+            NtStatus.STATUS_NO_SUCH_FILE,
+            NtStatus.STATUS_END_OF_FILE,
+            NtStatus.STATUS_MORE_PROCESSING_REQUIRED,
+            NtStatus.STATUS_ACCESS_DENIED,
+            NtStatus.STATUS_OBJECT_NAME_INVALID,
+            NtStatus.STATUS_OBJECT_NAME_NOT_FOUND,
+            NtStatus.STATUS_OBJECT_NAME_COLLISION,
+            NtStatus.STATUS_OBJECT_PATH_NOT_FOUND,
+            NtStatus.STATUS_SHARING_VIOLATION,
+            NtStatus.STATUS_FILE_LOCK_CONFLICT,
+            NtStatus.STATUS_LOCK_NOT_GRANTED,
+            NtStatus.STATUS_LOGON_FAILURE,
+            NtStatus.STATUS_INVALID_NETWORK_RESPONSE,
+            NtStatus.STATUS_BAD_NETWORK_NAME,
+            NtStatus.STATUS_NOT_A_DIRECTORY,
+            NtStatus.STATUS_FILE_IS_A_DIRECTORY,
+            NtStatus.STATUS_DIRECTORY_NOT_EMPTY,
+            0xDEAD_BEEFu,
+        )
+        for (st in knownStatuses) {
+            assertTrue(NtStatus.nameOf(st).isNotEmpty())
+        }
+
+        share.closeSuspend()
+        client.closeSuspend()
+    }
+
+    @Test
+    fun testLoopbackTcpTransportAndSmbClientConnect() = runTest {
+        val creds = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
+        val mockBackend = MockSmb3ServerTransport(creds, encryptShare = true)
+
+        withContext(Dispatchers.IO) {
+            // 1. Valid Direct TCP session over loopback socket
+            val selector = SelectorManager(Dispatchers.IO)
+            val serverSocket = aSocket(selector).tcp().bind("127.0.0.1", 0)
+            val port = (serverSocket.localAddress as InetSocketAddress).port
+
+            val serverJob = launch {
+                val clientSocket = try {
+                    serverSocket.accept()
+                } catch (_: Throwable) {
+                    return@launch
+                }
+                try {
+                    val readCh = clientSocket.openReadChannel()
+                    val writeCh = clientSocket.openWriteChannel(autoFlush = false)
+                    val prefix = ByteArray(4)
+                    while (true) {
+                        readCh.readFully(prefix, 0, 4)
+                        val len = ((prefix[1].toInt() and 0xFF) shl 16) or
+                            ((prefix[2].toInt() and 0xFF) shl 8) or
+                            (prefix[3].toInt() and 0xFF)
+                        val req = ByteArray(len)
+                        readCh.readFully(req, 0, len)
+                        mockBackend.sendPacket(req)
+                        while (mockBackend.hasPendingResponses()) {
+                            val resp = mockBackend.receivePacket()
+                            val outPrefix = byteArrayOf(
+                                0,
+                                ((resp.size ushr 16) and 0xFF).toByte(),
+                                ((resp.size ushr 8) and 0xFF).toByte(),
+                                (resp.size and 0xFF).toByte(),
+                            )
+                            writeCh.writeFully(outPrefix, 0, 4)
+                            writeCh.writeFully(resp, 0, resp.size)
+                            writeCh.flush()
+                        }
+                    }
+                } catch (_: Throwable) {
+                } finally {
+                    runCatching { clientSocket.close() }
+                }
+            }
+
+            var client: SmbClient? = null
+            try {
+                val connected = SmbClient.connect(
+                    host = "127.0.0.1",
+                    port = port,
+                    credentials = creds,
+                    config = SmbConfig(encryptionPolicy = SmbEncryptionPolicy.REQUIRED),
+                )
+                client = connected
+                assertEquals(SmbDialect.SMB_3_1_1, connected.negotiatedDialect)
+                val share = connected.connectShare("PublicDocs")
+                share.writeText("notes/tcp.txt", "Over real TCP loopback!")
+                assertEquals("Over real TCP loopback!", share.readText("notes/tcp.txt"))
+                share.closeSuspend()
+            } finally {
+                runCatching { client?.closeSuspend() }
+                serverJob.cancel()
+                runCatching { serverSocket.close() }
+                runCatching { selector.close() }
+            }
+
+            // 2. Malformed Direct TCP stream header & undersized frame length guards + SmbClient.connect rollback
+            for (badFrame in listOf(
+                byteArrayOf(0x01, 0x00, 0x00, 0x40), // Non-zero first byte
+                byteArrayOf(0x00, 0x00, 0x00, 0x10), // Frame length (16) < SmbHeader.SIZE (64)
+            )) {
+                val badSelector = SelectorManager(Dispatchers.IO)
+                val badServer = aSocket(badSelector).tcp().bind("127.0.0.1", 0)
+                val badPort = (badServer.localAddress as InetSocketAddress).port
+                val badJob = launch {
+                    val sock = try {
+                        badServer.accept()
+                    } catch (_: Throwable) {
+                        return@launch
+                    }
+                    try {
+                        val r = sock.openReadChannel()
+                        val w = sock.openWriteChannel(autoFlush = false)
+                        val hdr = ByteArray(4)
+                        r.readFully(hdr, 0, 4)
+                        val reqLen = ((hdr[1].toInt() and 0xFF) shl 16) or
+                            ((hdr[2].toInt() and 0xFF) shl 8) or
+                            (hdr[3].toInt() and 0xFF)
+                        if (reqLen > 0) {
+                            r.readFully(ByteArray(reqLen), 0, reqLen)
+                        }
+                        w.writeFully(badFrame, 0, badFrame.size)
+                        w.flush()
+                    } catch (_: Throwable) {
+                    } finally {
+                        runCatching { sock.close() }
+                    }
+                }
+                try {
+                    assertFailsWith<IllegalStateException> {
+                        SmbClient.connect(
+                            host = "127.0.0.1",
+                            port = badPort,
+                            credentials = creds,
+                        )
+                    }
+                } finally {
+                    badJob.cancel()
+                    runCatching { badServer.close() }
+                    runCatching { badSelector.close() }
+                }
+            }
+        }
+    }
+
     /**
-     * In-memory mock SMB 3.1.1 server transport for end-to-end testing.
+     * In-memory mock SMB2/SMB3 server transport for end-to-end testing.
      */
     private class MockSmb3ServerTransport(
         private val expectedCredentials: SmbCredentials,
+        private val dialect: SmbDialect = SmbDialect.SMB_3_1_1,
+        private val cipherId: SmbCipherId = SmbCipherId.AES_128_GCM,
         private val encryptShare: Boolean = true,
         private val omitRelatedErrorResponses: Boolean = false,
+        private val maxReadWriteSize: UInt = 65536u,
+        private val immediateAnonymousSuccess: Boolean = false,
+        private val returnGuestSessionFlag: Boolean = false,
+        private val includeTimestampInChallenge: Boolean = false,
+        private val injectPendingAndNotifications: Boolean = false,
+        private val multiFragmentRpcResponse: Boolean = false,
+        private val multiBatchDirectoryQuery: Boolean = false,
     ) : SmbPacketTransport {
 
         private val responseQueue = ArrayDeque<ByteArray>()
@@ -628,19 +1213,24 @@ class SmbClientEndToEndTest {
         private val directories = mutableSetOf("", "notes", "data", "streams")
         private val openHandles = mutableMapOf<ULong, String>()
         private val pendingPipeReads = mutableMapOf<ULong, ByteArray>()
-        private val queriedDirs = mutableSetOf<ULong>()
+        private val dirQueryCounts = mutableMapOf<ULong, Int>()
         private var nextHandleId: ULong = 100uL
         private var lastSeenMessageId: Long = -1L
 
         var splitRpcTransceiveResponse: Boolean = false
+        var stripServerSignatureOnNextResponse: Boolean = false
+        var corruptServerSignatureOnNextResponse: Boolean = false
         var encryptedPacketsCount: Int = 0
             private set
+        val signedRequestCommands = mutableListOf<SmbCommand>()
+
+        fun hasPendingResponses(): Boolean = responseQueue.isNotEmpty()
 
         override suspend fun sendPacket(packet: ByteArray) {
             val wasEncrypted = SmbTransformHeader.isTransformPacket(packet)
             val plainPacket = if (wasEncrypted) {
                 encryptedPacketsCount++
-                SmbTransformHeader.decryptPacket(packet, SmbCipherId.AES_128_GCM, serverDecryptionKey!!)
+                SmbTransformHeader.decryptPacket(packet, cipherId, serverDecryptionKey!!)
             } else {
                 packet
             }
@@ -652,6 +1242,9 @@ class SmbClientEndToEndTest {
 
             for ((partIndex, rawPart) in reqParts.withIndex()) {
                 val reqHeader = SmbHeader.decode(rawPart)
+                if (!wasEncrypted && reqHeader.isSigned) {
+                    signedRequestCommands.add(reqHeader.command)
+                }
                 val msgIdLong = reqHeader.messageId.toLong()
                 check(msgIdLong > lastSeenMessageId) {
                     "Out-of-order or duplicate MessageId detected: received=$msgIdLong, lastSeen=$lastSeenMessageId"
@@ -695,11 +1288,17 @@ class SmbClientEndToEndTest {
                         val secBlob = plainReq.copyOfRange(secBufOffset, secBufOffset + secBufLen)
 
                         if (reqHeader.sessionId == 0uL) {
-                            val resp = buildSessionSetupChallenge(reqHeader.messageId)
-                            preauthHash = updateHash(preauthHash, resp)
-                            resp
+                            if (immediateAnonymousSuccess) {
+                                buildSessionSetupSuccess(reqHeader.messageId)
+                            } else {
+                                val resp = buildSessionSetupChallenge(reqHeader.messageId)
+                                preauthHash = updateHash(preauthHash, resp)
+                                resp
+                            }
                         } else {
-                            deriveSessionKeysFromType3(secBlob)
+                            if (!expectedCredentials.isAnonymous && !returnGuestSessionFlag) {
+                                deriveSessionKeysFromType3(secBlob)
+                            }
                             buildSessionSetupSuccess(reqHeader.messageId)
                         }
                     }
@@ -719,7 +1318,7 @@ class SmbClientEndToEndTest {
                         val vId = plainReq.readULongLE(SmbHeader.SIZE + 16)
                         if (reqHeader.command == SmbCommand.CLOSE) {
                             openHandles.remove(vId)
-                            queriedDirs.remove(vId)
+                            dirQueryCounts.remove(vId)
                         }
                         buildSimpleResponse(reqHeader, if (reqHeader.command == SmbCommand.CLOSE) 60 else 4)
                     }
@@ -734,13 +1333,57 @@ class SmbClientEndToEndTest {
                 respParts.add(singleResp)
             }
 
+            if (injectPendingAndNotifications && reqParts.first().let { SmbHeader.decode(it).command } !in listOf(SmbCommand.NEGOTIATE, SmbCommand.SESSION_SETUP)) {
+                val firstMsgId = SmbHeader.decode(reqParts.first()).messageId
+                // 1. Unsolicited OPLOCK_BREAK notification (MessageId = ULong.MAX_VALUE)
+                val unsolicited = ByteArray(SmbHeader.SIZE + 24)
+                SmbHeader(
+                    command = SmbCommand.OPLOCK_BREAK,
+                    flags = SmbHeader.SMB2_FLAGS_SERVER_TO_REDIR,
+                    messageId = ULong.MAX_VALUE,
+                ).encodeInto(unsolicited, 0)
+                responseQueue.addLast(unsolicited)
+
+                // 2. Interim STATUS_PENDING async response
+                val pending = ByteArray(SmbHeader.SIZE + 8)
+                SmbHeader(
+                    status = NtStatus.STATUS_PENDING,
+                    command = SmbHeader.decode(reqParts.first()).command,
+                    flags = SmbHeader.SMB2_FLAGS_SERVER_TO_REDIR or SmbHeader.SMB2_FLAGS_ASYNC_COMMAND,
+                    messageId = firstMsgId,
+                    asyncIdOrTreeId = 0xCAFE_BABEuL,
+                    sessionId = sessionId,
+                ).encodeInto(pending, 0)
+                responseQueue.addLast(pending)
+
+                // 3. Stale response with older MessageId (0)
+                if (firstMsgId > 1uL) {
+                    val stale = ByteArray(SmbHeader.SIZE + 4)
+                    SmbHeader(
+                        command = SmbCommand.ECHO,
+                        flags = SmbHeader.SMB2_FLAGS_SERVER_TO_REDIR,
+                        messageId = 0uL,
+                        sessionId = sessionId,
+                    ).encodeInto(stale, 0)
+                    responseQueue.addLast(stale)
+                }
+            }
+
             val signEach: ((ByteArray) -> Unit)? = if (!wasEncrypted && serverSigningKey != null) {
                 { slice ->
                     val hdr = SmbHeader.decode(slice)
                     if (hdr.command != SmbCommand.NEGOTIATE &&
                         !(hdr.command == SmbCommand.SESSION_SETUP && hdr.status != NtStatus.STATUS_SUCCESS)
                     ) {
-                        SmbHeader.signPacket(slice, SmbDialect.SMB_3_1_1, serverSigningKey!!)
+                        if (stripServerSignatureOnNextResponse) {
+                            stripServerSignatureOnNextResponse = false
+                        } else {
+                            SmbHeader.signPacket(slice, dialect, serverSigningKey!!)
+                            if (corruptServerSignatureOnNextResponse) {
+                                corruptServerSignatureOnNextResponse = false
+                                slice[48] = (slice[48].toInt() xor 0xFF).toByte()
+                            }
+                        }
                     }
                 }
             } else {
@@ -752,7 +1395,7 @@ class SmbClientEndToEndTest {
                 SmbTransformHeader.encryptPacket(
                     plainSmbPacket = plainResp,
                     sessionId = sessionId,
-                    cipherId = SmbCipherId.AES_128_GCM,
+                    cipherId = cipherId,
                     encryptionKey = serverEncryptionKey!!
                 )
             } else {
@@ -788,6 +1431,29 @@ class SmbClientEndToEndTest {
         }
 
         private fun buildNegotiateResponse(messageId: ULong): ByteArray {
+            if (dialect != SmbDialect.SMB_3_1_1) {
+                val packet = ByteArray(SmbHeader.SIZE + 64)
+                SmbHeader(
+                    command = SmbCommand.NEGOTIATE,
+                    flags = SmbHeader.SMB2_FLAGS_SERVER_TO_REDIR,
+                    messageId = messageId,
+                ).encodeInto(packet, 0)
+                val b = SmbHeader.SIZE
+                packet.writeUShortLE(b, 65u)
+                packet.writeUShortLE(b + 2, 0x0001u)
+                packet.writeUShortLE(b + 4, dialect.code)
+                val caps = if (dialect.isSmb3 && encryptShare) {
+                    SmbMessages.SMB2_GLOBAL_CAP_LARGE_MTU or SmbMessages.SMB2_GLOBAL_CAP_ENCRYPTION
+                } else {
+                    0u
+                }
+                packet.writeUIntLE(b + 24, caps)
+                packet.writeUIntLE(b + 28, maxReadWriteSize)
+                packet.writeUIntLE(b + 32, maxReadWriteSize)
+                packet.writeUIntLE(b + 36, maxReadWriteSize)
+                return packet
+            }
+
             // Context 1: SMB2_PREAUTH_INTEGRITY_CAPABILITIES (0x0001), HashAlgorithmCount=1, SaltLength=32, HashAlgorithms[0]=SHA-512 (0x0001)
             // Header(8) + Data(6 + 32 = 38) = 46 bytes, padded to 8-byte alignment = 48 bytes
             val ctx1 = ByteArray(48)
@@ -797,12 +1463,12 @@ class SmbClientEndToEndTest {
             ctx1.writeUShortLE(10, 32u) // SaltLength = 32
             ctx1.writeUShortLE(12, 0x0001u) // SHA-512
 
-            // Context 2: SMB2_ENCRYPTION_CAPABILITIES (0x0002), CipherCount=1, Cipher=AES_128_GCM (0x0002)
+            // Context 2: SMB2_ENCRYPTION_CAPABILITIES (0x0002), CipherCount=1
             val ctx2 = ByteArray(14)
             ctx2.writeUShortLE(0, 0x0002u) // Type = SMB2_ENCRYPTION_CAPABILITIES
             ctx2.writeUShortLE(2, 6u) // DataLength = 6
             ctx2.writeUShortLE(8, 1u) // CipherCount = 1
-            ctx2.writeUShortLE(10, SmbCipherId.AES_128_GCM.code)
+            ctx2.writeUShortLE(10, cipherId.code)
             ctx2.writeUShortLE(12, 0u) // Padding
 
             val ctxOffset = 64 + 64 // 128 (8-byte aligned)
@@ -820,9 +1486,9 @@ class SmbClientEndToEndTest {
             packet.writeUShortLE(b + 4, SmbDialect.SMB_3_1_1.code)
             packet.writeUShortLE(b + 6, 2u) // NegotiateContextCount = 2
             packet.writeUIntLE(b + 24, SmbMessages.SMB2_GLOBAL_CAP_LARGE_MTU or SmbMessages.SMB2_GLOBAL_CAP_ENCRYPTION)
-            packet.writeUIntLE(b + 28, 65536u)
-            packet.writeUIntLE(b + 32, 65536u)
-            packet.writeUIntLE(b + 36, 65536u)
+            packet.writeUIntLE(b + 28, maxReadWriteSize)
+            packet.writeUIntLE(b + 32, maxReadWriteSize)
+            packet.writeUIntLE(b + 36, maxReadWriteSize)
             packet.writeUShortLE(b + 56, 128u) // SecurityBufferOffset
             packet.writeUShortLE(b + 58, 0u) // SecurityBufferLength
             packet.writeUIntLE(b + 60, ctxOffset.toUInt())
@@ -833,17 +1499,29 @@ class SmbClientEndToEndTest {
         }
 
         private fun buildSessionSetupChallenge(messageId: ULong): ByteArray {
-            // Minimal NTLMSSP Type 2 message
-            val type2 = ByteArray(56)
+            val targetInfo = if (includeTimestampInChallenge) {
+                // MSV_AV_FLAGS (id=6, len=4, val=0) + MSV_AV_TIMESTAMP (id=7, len=8, val=133485408000000000) + MSV_AV_EOL (id=0, len=0)
+                ByteArray(8 + 12 + 4).apply {
+                    writeUShortLE(0, 6u)
+                    writeUShortLE(2, 4u)
+                    writeUIntLE(4, 0u)
+                    writeUShortLE(8, 7u)
+                    writeUShortLE(10, 8u)
+                    writeULongLE(12, 133485408000000000uL)
+                }
+            } else {
+                ByteArray(4) // MSV_AV_EOL
+            }
+            val type2 = ByteArray(48 + targetInfo.size)
             "NTLMSSP\u0000".encodeToByteArray().copyInto(type2, 0)
             type2.writeUIntLE(8, 2u)
             val flags = 0x62888215u
             type2.writeUIntLE(20, flags)
             serverChallenge.copyInto(type2, 24)
-            // TargetInfo: MSV_AV_EOL (4 bytes at offset 48)
-            type2.writeUShortLE(40, 4u)
-            type2.writeUShortLE(42, 4u)
+            type2.writeUShortLE(40, targetInfo.size.toUShort())
+            type2.writeUShortLE(42, targetInfo.size.toUShort())
             type2.writeUIntLE(44, 48u)
+            targetInfo.copyInto(type2, 48)
 
             val packet = ByteArray(SmbHeader.SIZE + 8 + type2.size)
             val header = SmbHeader(
@@ -891,11 +1569,18 @@ class SmbClientEndToEndTest {
                 sessionBaseKey
             }
 
-            val derived = Smb3Kdf.deriveKeys(SmbDialect.SMB_3_1_1, exportedSessionKey, preauthHash)
-            serverSigningKey = derived.signingKey
-            // From server's perspective: client's encryptionKey (C2S) is server's decryptionKey, and S2C is server's encryptionKey
-            serverDecryptionKey = derived.encryptionKey
-            serverEncryptionKey = derived.decryptionKey
+            if (dialect.isSmb3) {
+                val derived = Smb3Kdf.deriveKeys(
+                    dialect = dialect,
+                    sessionKey = exportedSessionKey,
+                    preauthIntegrityHash = if (dialect == SmbDialect.SMB_3_1_1) preauthHash else null,
+                )
+                serverSigningKey = derived.signingKey
+                serverDecryptionKey = derived.encryptionKey
+                serverEncryptionKey = derived.decryptionKey
+            } else {
+                serverSigningKey = exportedSessionKey.copyOf(16)
+            }
         }
 
         private fun buildSessionSetupSuccess(messageId: ULong): ByteArray {
@@ -910,7 +1595,12 @@ class SmbClientEndToEndTest {
             header.encodeInto(packet, 0)
             val b = SmbHeader.SIZE
             packet.writeUShortLE(b, 9u)
-            packet.writeUShortLE(b + 2, if (encryptShare) SmbMessages.SMB2_SESSION_FLAG_ENCRYPT_DATA else 0u)
+            val sessFlags: UShort = when {
+                returnGuestSessionFlag -> SmbMessages.SMB2_SESSION_FLAG_IS_GUEST
+                encryptShare && dialect.isSmb3 -> SmbMessages.SMB2_SESSION_FLAG_ENCRYPT_DATA
+                else -> 0u
+            }
+            packet.writeUShortLE(b + 2, sessFlags)
             packet.writeUShortLE(b + 4, 72u)
             packet.writeUShortLE(b + 6, 0u)
             return packet
@@ -929,7 +1619,7 @@ class SmbClientEndToEndTest {
             val b = SmbHeader.SIZE
             packet.writeUShortLE(b, 16u)
             packet[b + 2] = 0x01 // ShareType
-            packet.writeUIntLE(b + 4, if (encryptShare) SmbMessages.SMB2_SHAREFLAG_ENCRYPT_DATA else 0u)
+            packet.writeUIntLE(b + 4, if (encryptShare && dialect.isSmb3) SmbMessages.SMB2_SHAREFLAG_ENCRYPT_DATA else 0u)
             return packet
         }
 
@@ -944,15 +1634,19 @@ class SmbClientEndToEndTest {
 
             val isKnownDir = path in directories
             val isKnownFile = files.containsKey(path)
+            val isPipe = path == "srvsvc" || path == "wkssvc"
 
-            // disposition 1 = FILE_OPEN
-            if (disposition == 1u && path.isNotEmpty() && path != "srvsvc" && !isKnownDir && !isKnownFile) {
+            // disposition 1 = FILE_OPEN, 2 = FILE_CREATE
+            if (disposition == 1u && path.isNotEmpty() && !isPipe && !isKnownDir && !isKnownFile) {
                 return buildSimpleResponse(reqHeader, 8, NtStatus.STATUS_OBJECT_NAME_NOT_FOUND)
             }
-            if (disposition >= 2u && path.isNotEmpty()) {
+            if (disposition == 2u && path.isNotEmpty() && (isKnownDir || isKnownFile)) {
+                return buildSimpleResponse(reqHeader, 8, NtStatus.STATUS_OBJECT_NAME_COLLISION)
+            }
+            if ((disposition == 0u || disposition >= 2u) && path.isNotEmpty()) {
                 if (isDirCreate) {
                     directories.add(path)
-                } else if (!isKnownFile) {
+                } else if (disposition == 0u || disposition == 4u || disposition == 5u || !isKnownFile) {
                     files[path] = ByteArray(0)
                 }
             }
@@ -991,11 +1685,15 @@ class SmbClientEndToEndTest {
             val handleId = plainReq.readULongLE(b + 24)
             val path = openHandles[handleId] ?: ""
 
-            val existing = files[path] ?: ByteArray(0)
-            val newBuf = ByteArray(maxOf(existing.size, fileOff + dataLen))
-            existing.copyInto(newBuf, 0)
-            plainReq.copyInto(newBuf, fileOff, dataOff, dataOff + dataLen)
-            files[path] = newBuf
+            if (path == "wkssvc") {
+                pendingPipeReads[handleId] = plainReq.copyOfRange(dataOff, dataOff + dataLen)
+            } else {
+                val existing = files[path] ?: ByteArray(0)
+                val newBuf = ByteArray(maxOf(existing.size, fileOff + dataLen))
+                existing.copyInto(newBuf, 0)
+                plainReq.copyInto(newBuf, fileOff, dataOff, dataOff + dataLen)
+                files[path] = newBuf
+            }
 
             val packet = ByteArray(SmbHeader.SIZE + 16)
             val header = SmbHeader.withTreeId(
@@ -1050,9 +1748,8 @@ class SmbClientEndToEndTest {
         private fun handleQueryDirectory(reqHeader: SmbHeader, plainReq: ByteArray): ByteArray {
             val b = SmbHeader.SIZE
             val handleId = plainReq.readULongLE(b + 16)
-            if (!queriedDirs.add(handleId)) {
-                return buildSimpleResponse(reqHeader, 8, NtStatus.STATUS_NO_MORE_FILES)
-            }
+            val count = dirQueryCounts.getOrElse(handleId) { 0 }
+            dirQueryCounts[handleId] = count + 1
             val dirPath = openHandles[handleId] ?: ""
             val prefix = if (dirPath.isEmpty()) "" else "$dirPath\\"
 
@@ -1077,13 +1774,26 @@ class SmbClientEndToEndTest {
             }
 
             if (directEntries.isEmpty()) {
-                return buildSimpleResponse(reqHeader, 8, NtStatus.STATUS_NO_SUCH_FILE)
+                val emptyStatus = if (count == 0) NtStatus.STATUS_NO_SUCH_FILE else NtStatus.STATUS_NO_MORE_FILES
+                return buildSimpleResponse(reqHeader, 8, emptyStatus)
             }
 
-            val encodedEntries = directEntries.mapIndexed { idx, item ->
+            val batchEntries = if (multiBatchDirectoryQuery) {
+                if (count >= directEntries.size) {
+                    return buildSimpleResponse(reqHeader, 8, NtStatus.STATUS_NO_MORE_FILES)
+                }
+                listOf(directEntries[count])
+            } else {
+                if (count >= 1) {
+                    return buildSimpleResponse(reqHeader, 8, NtStatus.STATUS_NO_MORE_FILES)
+                }
+                directEntries
+            }
+
+            val encodedEntries = batchEntries.mapIndexed { idx, item ->
                 val nameBytes = item.name.encodeToUtf16LE()
                 val rawLen = 104 + nameBytes.size
-                val isLast = idx == directEntries.lastIndex
+                val isLast = idx == batchEntries.lastIndex
                 val paddedLen = if (isLast) rawLen else (rawLen + 7) and -8
                 val buf = ByteArray(paddedLen)
                 buf.writeUIntLE(0, if (isLast) 0u else paddedLen.toUInt())
@@ -1122,7 +1832,6 @@ class SmbClientEndToEndTest {
         private fun handleSetInfo(reqHeader: SmbHeader, plainReq: ByteArray): ByteArray {
             val b = SmbHeader.SIZE
             val infoClass = plainReq[b + 3].toInt() and 0xFF
-            val bufLen = plainReq.readUIntLE(b + 4).toInt()
             val bufOff = plainReq.readUShortLE(b + 8).toInt()
             val handleId = plainReq.readULongLE(b + 24)
             val path = openHandles[handleId] ?: ""
@@ -1160,67 +1869,121 @@ class SmbClientEndToEndTest {
             val rpcIn = plainReq.copyOfRange(inOff, inOff + inLen)
             val ptype = rpcIn[2].toInt()
 
-            val rpcOut = if (ptype == 11) {
+            if (ptype == 11) {
                 // Bind_ack (PTYPE = 12)
-                ByteArray(24).apply {
+                val bindAck = ByteArray(24).apply {
                     this[0] = 5
                     this[1] = 0
                     this[2] = 12
                     this[3] = 0x03
                     writeUShortLE(8, 24u)
                 }
-            } else {
-                // NetrShareEnum Response PDU (PTYPE = 2) with 1 share: "PublicDocs" (DISKTREE), "Shared Documents"
-                val nameStr = "PublicDocs\u0000"
-                val nameBytes = nameStr.encodeToUtf16LE()
-                val namePad = (4 - (nameBytes.size % 4)) % 4
-
-                val remStr = "Shared Documents\u0000"
-                val remBytes = remStr.encodeToUtf16LE()
-                val remPad = (4 - (remBytes.size % 4)) % 4
-
-                val stub = ByteArray(24 + 12 + (12 + nameBytes.size + namePad) + (12 + remBytes.size + remPad) + 12)
-                var pos = 0
-                stub.writeUIntLE(pos, 1u); pos += 4 // Level = 1
-                stub.writeUIntLE(pos, 1u); pos += 4 // Switch = 1
-                stub.writeUIntLE(pos, 0x00020000u); pos += 4 // Container Ptr
-                stub.writeUIntLE(pos, 1u); pos += 4 // EntriesRead = 1
-                stub.writeUIntLE(pos, 0x00020004u); pos += 4 // Buffer Ptr
-                stub.writeUIntLE(pos, 1u); pos += 4 // MaxCount = 1
-
-                // SHARE_INFO_1 entry
-                stub.writeUIntLE(pos, 0x00020008u); pos += 4 // netname ptr
-                stub.writeUIntLE(pos, 0u); pos += 4 // type = DISKTREE (0)
-                stub.writeUIntLE(pos, 0x0002000Cu); pos += 4 // remark ptr
-
-                // netname string
-                stub.writeUIntLE(pos, nameStr.length.toUInt()); pos += 4
-                stub.writeUIntLE(pos, 0u); pos += 4
-                stub.writeUIntLE(pos, nameStr.length.toUInt()); pos += 4
-                nameBytes.copyInto(stub, pos); pos += nameBytes.size + namePad
-
-                // remark string
-                stub.writeUIntLE(pos, remStr.length.toUInt()); pos += 4
-                stub.writeUIntLE(pos, 0u); pos += 4
-                stub.writeUIntLE(pos, remStr.length.toUInt()); pos += 4
-                remBytes.copyInto(stub, pos); pos += remBytes.size + remPad
-
-                val pdu = ByteArray(24 + stub.size)
-                pdu[0] = 5
-                pdu[2] = 2 // Response
-                pdu[3] = 0x03 // First | Last
-                pdu.writeUShortLE(8, pdu.size.toUShort())
-                stub.copyInto(pdu, 24)
-                pdu
+                return buildIoctlResponsePacket(reqHeader, bindAck, NtStatus.STATUS_SUCCESS)
             }
 
-            val (outPayload, ioctlStatus) = if (ptype != 11 && splitRpcTransceiveResponse && rpcOut.size > 40) {
-                pendingPipeReads[handleId] = rpcOut.copyOfRange(40, rpcOut.size)
-                rpcOut.copyOfRange(0, 40) to NtStatus.STATUS_BUFFER_OVERFLOW
+            val shareSpecs = if (multiFragmentRpcResponse) {
+                listOf(
+                    Triple("PublicDocs\u0000", 0u, "Shared Documents\u0000"),
+                    Triple("Printer1\u0000", 1u, "Office Printer\u0000"),
+                    Triple("ComPort\u0000", 2u, "Serial Device\u0000"),
+                    Triple("IPC$\u0000", 0x80000003u, "Remote IPC\u0000"),
+                    Triple("Custom$\u0000", 99u, "Vendor Special\u0000"),
+                )
             } else {
-                rpcOut to NtStatus.STATUS_SUCCESS
+                listOf(Triple("PublicDocs\u0000", 0u, "Shared Documents\u0000"))
             }
 
+            val stubBytes = buildNetrShareEnumStub(shareSpecs)
+
+            val (outPayload, ioctlStatus) = when {
+                multiFragmentRpcResponse -> {
+                    val splitAt = stubBytes.size / 2
+                    val stub1 = stubBytes.copyOfRange(0, splitAt)
+                    val stub2 = stubBytes.copyOfRange(splitAt, stubBytes.size)
+                    val pdu1 = ByteArray(24 + stub1.size).apply {
+                        this[0] = 5
+                        this[2] = 2
+                        this[3] = 0x01 // PFC_FIRST_FRAG only
+                        writeUShortLE(8, this.size.toUShort())
+                        stub1.copyInto(this, 24)
+                    }
+                    val pdu2 = ByteArray(24 + stub2.size).apply {
+                        this[0] = 5
+                        this[2] = 2
+                        this[3] = 0x02 // PFC_LAST_FRAG
+                        writeUShortLE(8, this.size.toUShort())
+                        stub2.copyInto(this, 24)
+                    }
+                    pendingPipeReads[handleId] = pdu2
+                    pdu1 to NtStatus.STATUS_SUCCESS
+                }
+                splitRpcTransceiveResponse -> {
+                    val pdu = ByteArray(24 + stubBytes.size).apply {
+                        this[0] = 5
+                        this[2] = 2
+                        this[3] = 0x03
+                        writeUShortLE(8, this.size.toUShort())
+                        stubBytes.copyInto(this, 24)
+                    }
+                    pendingPipeReads[handleId] = pdu.copyOfRange(40, pdu.size)
+                    pdu.copyOfRange(0, 40) to NtStatus.STATUS_BUFFER_OVERFLOW
+                }
+                else -> {
+                    val pdu = ByteArray(24 + stubBytes.size).apply {
+                        this[0] = 5
+                        this[2] = 2
+                        this[3] = 0x03
+                        writeUShortLE(8, this.size.toUShort())
+                        stubBytes.copyInto(this, 24)
+                    }
+                    pdu to NtStatus.STATUS_SUCCESS
+                }
+            }
+
+            return buildIoctlResponsePacket(reqHeader, outPayload, ioctlStatus)
+        }
+
+        private fun buildNetrShareEnumStub(shares: List<Triple<String, UInt, String>>): ByteArray {
+            val count = shares.size
+            val stringsBytes = shares.flatMap { (name, _, rem) -> listOf(name, rem) }.sumOf { s ->
+                val bLen = s.encodeToUtf16LE().size
+                val pad = (4 - (bLen % 4)) % 4
+                12 + bLen + pad
+            }
+            val stub = ByteArray(24 + count * 12 + stringsBytes + 12)
+            var pos = 0
+            stub.writeUIntLE(pos, 1u); pos += 4 // Level = 1
+            stub.writeUIntLE(pos, 1u); pos += 4 // Switch = 1
+            stub.writeUIntLE(pos, 0x00020000u); pos += 4 // Container Ptr
+            stub.writeUIntLE(pos, count.toUInt()); pos += 4 // EntriesRead
+            stub.writeUIntLE(pos, 0x00020004u); pos += 4 // Buffer Ptr
+            stub.writeUIntLE(pos, count.toUInt()); pos += 4 // MaxCount
+
+            var refId = 0x00020008u
+            for ((_, type, _) in shares) {
+                stub.writeUIntLE(pos, refId); refId += 4u; pos += 4
+                stub.writeUIntLE(pos, type); pos += 4
+                stub.writeUIntLE(pos, refId); refId += 4u; pos += 4
+            }
+
+            fun writeNdrString(strWithNull: String) {
+                val utf16 = strWithNull.encodeToUtf16LE()
+                val pad = (4 - (utf16.size % 4)) % 4
+                stub.writeUIntLE(pos, strWithNull.length.toUInt()); pos += 4
+                stub.writeUIntLE(pos, 0u); pos += 4
+                stub.writeUIntLE(pos, strWithNull.length.toUInt()); pos += 4
+                utf16.copyInto(stub, pos); pos += utf16.size + pad
+            }
+
+            for ((name, _, rem) in shares) {
+                writeNdrString(name)
+                writeNdrString(rem)
+            }
+            return stub
+        }
+
+        private fun buildIoctlResponsePacket(reqHeader: SmbHeader, outPayload: ByteArray, ioctlStatus: UInt): ByteArray {
+            val b = SmbHeader.SIZE
             val outOffset = SmbHeader.SIZE + 48
             val packet = ByteArray(outOffset + outPayload.size)
             val header = SmbHeader.withTreeId(
