@@ -1,5 +1,10 @@
 # kmcifs
 
+[![Maven Central Version](https://img.shields.io/maven-central/v/com.sorrowblue.kmcifs/kmcifs-client)](https://central.sonatype.com/artifact/com.sorrowblue.kmcifs/kmcifs-client)
+[![GitHub Release](https://img.shields.io/github/v/release/SorrowBlue/kmcifs)](https://github.com/SorrowBlue/kmcifs/releases)
+[![CI](https://github.com/SorrowBlue/kmcifs/actions/workflows/ci.yml/badge.svg)](https://github.com/SorrowBlue/kmcifs/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+
 English | [日本語](README.ja.md)
 
 An SMB2 / SMB3 client implementation for Kotlin Multiplatform. Built with the Kotlin Toolchain (`project.yaml` / `module.yaml`) instead of Gradle, it implements all protocol handling and cryptographic operations in common Kotlin code (`src/`) with only `ktor-network` and `kotlinx-io` as external dependencies. It provides identical behavior across JVM, Android, iOS (`iosArm64` / `iosSimulatorArm64`), macOS (`macosArm64`), Linux (`linuxX64` / `linuxArm64`), and Windows (`mingwX64`) without relying on platform-specific C libraries or OS APIs.
@@ -51,7 +56,7 @@ repositories:
   - url: mavenLocal
 
 dependencies:
-  - com.sorrowblue.kmcifs:kmcifs-client:0.0.1
+  - com.sorrowblue.kmcifs:kmcifs-client:<version>
 ```
 
 ### Using from a Gradle KMP project (`build.gradle.kts`)
@@ -60,7 +65,7 @@ dependencies:
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("com.sorrowblue.kmcifs:kmcifs-client:0.0.1")
+            implementation("com.sorrowblue.kmcifs:kmcifs-client:<version>")
         }
     }
 }
