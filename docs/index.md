@@ -1,24 +1,24 @@
 # kmcifs
 
-`kmcifs` は Kotlin Multiplatform 向けの SMB2 / SMB3 クライアントライブラリである。プラットフォーム固有のネイティブライブラリや OS 依存の暗号 API を一切使わず、`ktor-network` と `kotlinx-io` のみを土台として共通 Kotlin コードだけでプロトコル処理と暗号演算を実装している。
+`kmcifs` is an SMB2 / SMB3 client library for Kotlin Multiplatform. It implements all protocol handling and cryptographic operations in common Kotlin code on top of `ktor-network` and `kotlinx-io`, without using any platform-specific native libraries or OS-dependent crypto APIs.
 
-対応ターゲットは JVM、Android（`minSdk 26`）、iOS（`iosArm64` / `iosSimulatorArm64`）、macOS（`macosArm64`）、Linux（`linuxX64` / `linuxArm64`）、Windows（`mingwX64`）の 8 環境。いずれのターゲットでも同一の API と通信挙動を提供する。クラス・メソッド単位の網羅的な仕様は [Dokka API リファレンス](api/index.html) を参照。
+Supported targets cover 8 environments: JVM, Android (`minSdk 26`), iOS (`iosArm64` / `iosSimulatorArm64`), macOS (`macosArm64`), Linux (`linuxX64` / `linuxArm64`), and Windows (`mingwX64`). Every target provides the exact same API and network behavior. For class- and method-level specifications, see the [Dokka API Reference](api/index.html).
 
-## 対応プロトコルと暗号仕様
+## Supported Protocols and Cryptography
 
-ダイアレクトは SMB 2.0.2、2.1、3.0、3.0.2、3.1.1 を網羅している。サーバーとのネゴシエーション時にはクライアント側で対応可能なダイアレクト一覧を提示し、SMB 3.1.1 が選択された場合は `SHA-512` による Preauth Integrity Hash（通信改ざん検知用の連鎖ハッシュ）と `AES-128-GCM` / `AES-128-CCM` の Encryption Capabilities Context を交換する。
+Supported dialects span SMB 2.0.2, 2.1, 3.0, 3.0.2, and 3.1.1. During negotiation with the server, the client presents its list of supported dialects; when SMB 3.1.1 is selected, it exchanges the `SHA-512` Preauth Integrity Hash (a chained hash for tamper detection) and the `AES-128-GCM` / `AES-128-CCM` Encryption Capabilities Context.
 
-認証は SPNEGO ラップされた NTLMSSP（NTLMv2）およびゲスト・匿名セッションに対応する。NTLMv2 認証では `MD4` / `HMAC-MD5` による NT Proof 計算、`RC4` によるセッション鍵交換（`NTLMSSP_NEGOTIATE_KEY_EXCH`）、メッセージ完全性コード（MIC）の生成・検証を行い、確立したセッション鍵から NIST SP800-108 カウンタモード KDF を用いて署名鍵と暗号化・復号鍵を導出する。パケット署名は SMB 2.x が `HMAC-SHA256`、SMB 3.x が `AES-128-CMAC`。パケット暗号化は SMB 3.x Transform Header（`0xFD 'S' 'M' 'B'`）を用いた `AES-128-GCM` および `AES-128-CCM` で動作する。
+Authentication supports SPNEGO-wrapped NTLMSSP (NTLMv2) as well as guest and anonymous sessions. NTLMv2 authentication computes the NT Proof via `MD4` / `HMAC-MD5`, performs `RC4` session key exchange (`NTLMSSP_NEGOTIATE_KEY_EXCH`), and generates and verifies the Message Integrity Code (MIC). From the established session key, signing and encryption/decryption keys are derived using the NIST SP800-108 counter-mode KDF. Packet signing uses `HMAC-SHA256` for SMB 2.x and `AES-128-CMAC` for SMB 3.x. Packet encryption operates with `AES-128-GCM` and `AES-128-CCM` using the SMB 3.x Transform Header (`0xFD 'S' 'M' 'B'`).
 
-## 導入方法
+## Installation
 
-リポジトリのルートに同梱されている `kotlin`（または `kotlin.bat`）でローカル Maven リポジトリへ公開できる。
+You can publish the library to your local Maven repository using the `kotlin` (or `kotlin.bat`) wrapper included at the root of the repository.
 
 ```bash
 ./kotlin publish mavenLocal
 ```
 
-Kotlin Toolchain（Amper）プロジェクトから参照する場合は `module.yaml` に `mavenLocal` と依存関係を追加する。
+When referencing from a Kotlin Toolchain (Amper) project, add `mavenLocal` and the dependency to `module.yaml`:
 
 ```yaml
 repositories:
@@ -28,7 +28,7 @@ dependencies:
   - com.sorrowblue.kmcifs:kmcifs-client:0.0.1
 ```
 
-Gradle ベースの Kotlin Multiplatform プロジェクトから利用する場合は `build.gradle.kts` の `commonMain` に追加する。
+When using from a Gradle-based Kotlin Multiplatform project, add it to `commonMain` in `build.gradle.kts`:
 
 ```kotlin
 repositories {
@@ -45,9 +45,9 @@ kotlin {
 }
 ```
 
-## 最小構成のコード例
+## Minimal Example
 
-サーバーへ接続して共有フォルダ一覧を取得し、特定の共有フォルダ内のファイルを読み取る一連の流れを示す。リソース解放には `AutoCloseable` の `close()` ではなく、サーバーへ明示的に `SMB2 CLOSE` / `TREE_DISCONNECT` / `LOGOFF` パケットを送信する `closeSuspend()` を使用する。
+The following example connects to a server, lists available shared folders, and reads a file inside a specific share. To release resources cleanly, use `closeSuspend()` rather than `AutoCloseable.close()` so that `SMB2 CLOSE`, `TREE_DISCONNECT`, and `LOGOFF` packets are explicitly sent to the server.
 
 ```kotlin
 import com.sorrowblue.kmcifs.client.SmbClient

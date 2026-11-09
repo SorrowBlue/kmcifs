@@ -1,39 +1,39 @@
-# 接続・認証・暗号化
+# Connection, Authentication & Encryption
 
-SMB サーバーとの接続は `SmbClient.connect` から開始する。TCP 接続の確立（既定ポート `445`、`TCP_NODELAY` 有効）、`SMB2 NEGOTIATE` によるプロトコルダイアレクトの決定、`SMB2 SESSION_SETUP` の 2 往復による NTLMv2 認証までがこの呼び出し内で完了する。
+Connecting to an SMB server starts with `SmbClient.connect`. Establishing the TCP connection (default port `445` with `TCP_NODELAY` enabled), negotiating the protocol dialect via `SMB2 NEGOTIATE`, and completing the two-round-trip NTLMv2 authentication via `SMB2 SESSION_SETUP` all take place within this call.
 
-## 認証情報の指定
+## Specifying Credentials
 
-ユーザー名・パスワード・ドメイン（またはワークグループ名）は `SmbCredentials` に格納する。ドメイン環境でない NAS やスタンドアロン Windows 共有では `domain` を空文字列または `"WORKGROUP"` のままにしておけばよい。認証を伴わないゲスト共有へ接続する場合は `SmbCredentials.Guest` または `SmbCredentials.Anonymous` を渡す。
+Store the username, password, and domain (or workgroup name) in `SmbCredentials`. For NAS devices or standalone Windows shares outside an Active Directory domain, leave `domain` as an empty string or `"WORKGROUP"`. To connect to an unauthenticated guest share, pass `SmbCredentials.Guest` or `SmbCredentials.Anonymous`.
 
 ```kotlin
 import com.sorrowblue.kmcifs.client.SmbClient
 import com.sorrowblue.kmcifs.client.auth.SmbCredentials
 
-// NTLMv2 認証
+// NTLMv2 authentication
 val credentials = SmbCredentials(
     username = "mediauser",
     password = "MyPassword123",
     domain = "WORKGROUP",
 )
 
-// ゲスト接続
+// Guest connection
 val guestCredentials = SmbCredentials.Guest
 ```
 
-## 署名と暗号化のトレードオフ (`SmbConfig`)
+## Signing and Encryption Trade-offs (`SmbConfig`)
 
-SMB 3.x では通信保護としてパケット単位の署名（`AES-128-CMAC`）と、Transform Header を用いたペイロード全体の暗号化（`AES-128-GCM` / `AES-128-CCM`）の 2 段階が存在する。`kmcifs-client` はクロスプラットフォームの一貫性を優先して AES 演算を純粋な Kotlin コードで実装しているため、この設定は通信速度に直結する。
+SMB 3.x provides two levels of traffic protection: per-packet signing (`AES-128-CMAC`) and full-payload encryption (`AES-128-GCM` / `AES-128-CCM`) using the Transform Header. Because `kmcifs-client` implements AES in pure Kotlin to guarantee cross-platform consistency, these settings directly affect transfer throughput.
 
-MS-SMB2 仕様（3.3.5.7）により、SMB 3.1.1 の `TREE_CONNECT` などのリクエストは「暗号化されていない場合は必ず署名されていなければならない」。これを満たさないリクエストに対して Windows Server や Samba は `STATUS_ACCESS_DENIED` を返す。一方でクライアントから送信する `READ` リクエスト自体はわずか 113 バイトであり、ここに `AES-128-CMAC` 署名を付ける計算コストは無視できるほど小さい。これに対し、サーバーから返ってくる 256KB の `READ` レスポンス全体をソフトウェア実装の `AES-128-GCM` で毎ブロック復号・検証すると、動画ストリーミングのような高帯域通信では CPU がボトルネックになる。
+Under the MS-SMB2 specification (Section 3.3.5.7), SMB 3.1.1 requests such as `TREE_CONNECT` must be signed whenever they are not encrypted; Windows Server and Samba reject unsigned unencrypted requests with `STATUS_ACCESS_DENIED`. Outgoing `READ` requests from the client are only 113 bytes, so the computational cost of attaching an `AES-128-CMAC` signature is negligible. By contrast, decrypting and verifying every 256KB `READ` response from the server with software `AES-128-GCM` makes the CPU a bottleneck during high-bandwidth transfers such as video streaming.
 
-この特性を踏まえ、`SmbConfig` では以下のポリシーを使い分ける。
+With this characteristic in mind, `SmbConfig` lets you choose the appropriate policy for your workload:
 
 ```kotlin
 import com.sorrowblue.kmcifs.client.SmbConfig
 import com.sorrowblue.kmcifs.client.SmbEncryptionPolicy
 
-// 高スループット設定（LAN 内の動画ストリーミングや大容量転送向け）
+// High-throughput configuration (for LAN video streaming and large file transfers)
 val streamingConfig = SmbConfig(
     encryptionPolicy = SmbEncryptionPolicy.NEGOTIATE,
     preferEncryption = false,
@@ -41,24 +41,24 @@ val streamingConfig = SmbConfig(
     verifyServerSignatures = false,
 )
 
-// 完全暗号化設定（機密文書や信頼できないネットワーク経路向け）
+// Full encryption configuration (for sensitive documents or untrusted networks)
 val strictEncryptedConfig = SmbConfig(
     encryptionPolicy = SmbEncryptionPolicy.REQUIRED,
     preferEncryption = true,
 )
 ```
 
-`SmbEncryptionPolicy.NEGOTIATE` かつ `preferEncryption = false` に設定すると、SMB 3.1.1 の Encryption Context 自体はネゴシエートしてサーバーや共有フォルダ側が暗号化を強制（`SMB2_SHAREFLAG_ENCRYPT_DATA`）している場合にのみ暗号化を有効化し、通常の共有フォルダでは送信パケットの署名のみで高速に通信する。暗号化が強制された環境でのみ接続を許可したい場合は `SmbEncryptionPolicy.REQUIRED` を指定する。このときサーバーが SMB 3.x 暗号化に対応していなければ、セッション確立時点で `SmbException` が送出される。
+When configured with `SmbEncryptionPolicy.NEGOTIATE` and `preferEncryption = false`, the client still negotiates the SMB 3.1.1 Encryption Context and enables encryption whenever required by the server or share (`SMB2_SHAREFLAG_ENCRYPT_DATA`), while communicating at high speed using request signing only on standard shares. If you want to allow connections only when encryption is enforced, specify `SmbEncryptionPolicy.REQUIRED`; if the server does not support SMB 3.x encryption, an `SmbException` is thrown during session setup.
 
-## 共有フォルダ一覧の列挙 (`listShares`)
+## Listing Shared Folders (`listShares`)
 
-サーバー上に公開されている共有フォルダ一覧は `client.listShares()` で取得できる。内部では管理用共有 `IPC$` に `TREE_CONNECT` し、名前付きパイプ `srvsvc` を開いて DCE/RPC の `Bind` と `NetrShareEnum`（Level 1）を実行する。
+Call `client.listShares()` to retrieve the list of shared folders published on the server. Internally, the client connects to the administrative share `IPC$` via `TREE_CONNECT`, opens the `srvsvc` named pipe, and executes a DCE/RPC `Bind` followed by `NetrShareEnum` (Level 1).
 
 ```kotlin
 val shares = client.listShares(includeHidden = false)
 for (share in shares) {
-    println("名前: ${share.name}, 種別: ${share.type}, コメント: ${share.comment}")
+    println("Name: ${share.name}, Type: ${share.type}, Comment: ${share.comment}")
 }
 ```
 
-`includeHidden = false`（既定値）では `IPC$` や `ADMIN$`、`C$` のように末尾に `$` が付く管理用・隠し共有およびタイプフラグに非表示ビットが立っている共有を除外し、通常のディスク共有（`SmbShareType.DISKTREE`）などを返す。隠し共有を含めてすべて取得したい場合は `includeHidden = true` を渡す。
+With `includeHidden = false` (the default), administrative and hidden shares ending with `$` (such as `IPC$`, `ADMIN$`, and `C$`) as well as shares with the hidden bit set in their type flags are filtered out, returning standard disk shares (`SmbShareType.DISKTREE`). Pass `includeHidden = true` to include hidden shares.

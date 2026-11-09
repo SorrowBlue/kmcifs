@@ -1,73 +1,73 @@
-# ランダムアクセスとストリーミング
+# Random Access & Streaming
 
-動画コンテナのインデックス解析やアーカイブファイルの展開など、ファイルポインタを前後に移動しながら読み書きを行う処理には `SmbRandomAccessFile` を使用する。JDK 標準の `java.io.RandomAccessFile` と同じ概念で設計されており、現在位置（`position`）の保持、`seek`、`read`、`readByte`、`write`、`length` の参照および `setLength` によるサイズ変更を備えている。
+Use `SmbRandomAccessFile` for workloads that move the file pointer back and forth while reading or writing, such as parsing video container indices or extracting archives. Modeled after `java.io.RandomAccessFile` in the standard JDK, it tracks the current offset (`position`) and supports `seek`, `read`, `readByte`, `write`, `length`, and resizing via `setLength`.
 
-## `SmbRandomAccessFile` のオープンとモード指定
+## Opening `SmbRandomAccessFile` and Modes
 
-`SmbShare.openRandomAccessFile` または `SmbRandomAccessFile.open` にパスとモード文字列を渡すと、サーバー上でファイルを開いた状態のインスタンスが返る。インスタンスを先に生成してから任意のタイミングで `open()` を呼び出すこともできる。
+Pass a path and mode string to `SmbShare.openRandomAccessFile` or `SmbRandomAccessFile.open` to obtain an instance with the file already opened on the server. You can also instantiate `SmbRandomAccessFile` first and call `open()` later.
 
-モード文字列は Java の `RandomAccessFile` と同一の 4 種類を受け付ける。
+Four mode strings are supported, matching `java.io.RandomAccessFile`:
 
-| モード | `SmbRandomAccessMode` | 挙動と SMB2 フラグ |
+| Mode | `SmbRandomAccessMode` | Behavior and SMB2 Flags |
 | :--- | :--- | :--- |
-| `"r"` | `READ_ONLY` | 読み取り専用（`FILE_OPEN`）。対象が存在しない場合は例外となり、書き込みメソッドを呼ぶと `IllegalStateException` を送出する。 |
-| `"rw"` | `READ_WRITE` | 読み書き両用（`FILE_OPEN_IF`）。対象が存在しない場合は新規作成する。 |
-| `"rws"` | `READ_WRITE_SYNC` | `"rw"` に加え `FILE_WRITE_THROUGH` を付与し、書き込み時にサーバー側ストレージへの同期フラッシュを要求する。 |
-| `"rwd"` | `READ_WRITE_DSYNC` | `"rws"` と同様に `FILE_WRITE_THROUGH` を有効化してオープンする。 |
+| `"r"` | `READ_ONLY` | Read-only (`FILE_OPEN`). Throws an exception if the file does not exist; calling any write method throws `IllegalStateException`. |
+| `"rw"` | `READ_WRITE` | Read/write (`FILE_OPEN_IF`). Creates a new file if the target does not exist. |
+| `"rws"` | `READ_WRITE_SYNC` | Adds `FILE_WRITE_THROUGH` to `"rw"`, requesting synchronous flushing to server storage on writes. |
+| `"rwd"` | `READ_WRITE_DSYNC` | Opens with `FILE_WRITE_THROUGH` enabled, similar to `"rws"`. |
 
 ```kotlin
 import com.sorrowblue.kmcifs.client.SmbRandomAccessFile
 
-// 共有フォルダから直接オープンする
+// Open directly from a share
 val raf = share.openRandomAccessFile("media/movie.avi", mode = "r")
 
-// インスタンスを生成してから open() を呼ぶ場合
+// Instantiate first and call open() explicitly
 val writableRaf = SmbRandomAccessFile(share, "data/index.bin", mode = "rw")
 writableRaf.open()
 ```
 
-## 読み取り・シーク・書き込み
+## Reading, Seeking, and Writing
 
-`position` プロパティは先頭からの現在オフセット（バイト単位）を返し、`length` プロパティは現在のファイルサイズを返す。どちらもメモリ上のメタデータを参照するためネットワーク通信は発生しない。
+The `position` property returns the current byte offset from the beginning of the file, and the `length` property returns the current file size. Both read in-memory metadata without triggering network I/O.
 
 ```kotlin
 val raf = share.openRandomAccessFile("data/sample.bin", mode = "rw")
 try {
-    // 書き込み（現在位置から書き込まれ、書き込んだバイト数だけ position が進む）
+    // Write at the current position (advances position by the number of bytes written)
     raf.write("RIFF".encodeToByteArray())
     raf.writeInt(0x12345678)
     raf.writeByte(0x7F)
-    println("現在のサイズ: ${raf.length}, 現在位置: ${raf.position}")
+    println("Current size: ${raf.length}, current position: ${raf.position}")
 
-    // 先頭へシークして読み取る
+    // Seek back to the start and read primitives
     raf.seek(0L)
     val magic = ByteArray(4)
     raf.readFully(magic)
     val headerValue = raf.readInt()
     val flag: Byte = raf.readByte()
 
-    // 任意の位置へシークして部分読み取り
+    // Seek to an arbitrary offset and read a slice
     raf.seek(4L)
     val buffer = ByteArray(16)
-    val bytesRead = raf.read(buffer, 0, buffer.size) // EOF 時は -1
+    val bytesRead = raf.read(buffer, 0, buffer.size) // Returns -1 at EOF
 
-    // ファイルサイズを切り詰める（position > newLength の場合は position も丸められる）
+    // Truncate the file (if position > newLength, position is clamped to newLength)
     raf.setLength(4L)
 } finally {
     raf.closeSuspend()
 }
 ```
 
-### `read()` と `readByte()` の終端（EOF）挙動の違い
+### EOF Behavior: `read()` vs. `readByte()`
 
-`java.io.RandomAccessFile` の規約に合わせ、メソッドによってファイル末尾（EOF）到達時の扱いが異なる。
+Following the contract of `java.io.RandomAccessFile`, end-of-file (EOF) handling differs depending on the method called.
 
-`read()`（1 バイト読み取り）および `read(b, off, len)`（バッファへの読み取り）は、すでに EOF に達している状態で呼び出されると例外を投げずに `-1` を返す。一方で `readByte()`、`readUnsignedByte()`、`readShort()`、`readInt()`、`readLong()`、`readFully()` は指定バイト数を読み切る前に EOF へ到達すると `SmbEndOfFileException` を送出する。
+`read()` (single-byte read) and `read(b, off, len)` (buffer read) return `-1` without throwing an exception when called at EOF. By contrast, `readByte()`, `readUnsignedByte()`, `readShort()`, `readInt()`, `readLong()`, and `readFully()` throw `SmbEndOfFileException` if EOF is reached before all requested bytes have been read.
 
-## 内部読み取りバッファの仕組み
+## Internal Read Buffering
 
-SMB プロトコル上で `readByte()` や数バイト単位の `read()` をそのまま 1 回ずつパケット送信すると、1 バイト読むたびに TCP 往復遅延（RTT）が加算されて実用にならない。そのため `SmbRandomAccessFile` は既定で 64KB（`DEFAULT_BUFFER_SIZE`）のインメモリ読み取りバッファを持つ。
+Sending an individual SMB packet for every `readByte()` or small `read()` call would incur a full TCP round-trip time (RTT) per byte. `SmbRandomAccessFile` supports an in-memory read buffer to coalesce small reads.
 
-`readByte()` や小さな `read()` が呼ばれた際、要求オフセットがバッファ内に存在すればネットワーク通信を一切行わずにメモリから即座に値を返す。バッファ外のオフセットが要求された場合は、その位置から最大 64KB 分を 1 回の `SMB2 READ` でまとめて取得する。逆に 64KB 以上の大きな `read(b, off, len)` が要求された場合は、余計なメモリコピーを避けるためサーバーから直接呼び出し元の配列へ読み込む。
+When `readByte()` or a small `read()` is called and the requested offset is present in the buffer, the value is returned immediately from memory without network traffic. When an unbuffered offset is requested, up to `bufferSize` bytes starting at that offset are fetched in a single `SMB2 READ`. Conversely, large `read(b, off, len)` calls exceeding the buffer size read directly from the server into the caller's array to avoid extra memory copies.
 
-`write` や `setLength` が実行された際は内部バッファを即座に破棄するため、直後に同じ領域を読み直しても古いキャッシュが返ることはない。バッファサイズを変更したい場合やバッファリングを無効化したい場合（`bufferSize = 0`）は、`openRandomAccessFile(path, mode, bufferSize)` の第 3 引数で指定できる。
+Executing `write` or `setLength` immediately invalidates the internal read buffer so subsequent reads never return stale data. You can customize the buffer size or disable buffering (`bufferSize = 0`) via the third argument of `openRandomAccessFile(path, mode, bufferSize)`.

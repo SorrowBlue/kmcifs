@@ -1,47 +1,50 @@
 # kmcifs
 
-Kotlin Multiplatform 向けの SMB2 / SMB3 クライアント実装。ビルドシステムには Gradle ではなく Kotlin Toolchain（`project.yaml` / `module.yaml`）を採用し、`ktor-network` と `kotlinx-io` のみを外部依存として共通 Kotlin コード（`src/`）だけでプロトコル処理と暗号演算を完結させている。JVM、Android、iOS（`iosArm64` / `iosSimulatorArm64`）、macOS（`macosArm64`）、Linux（`linuxX64` / `linuxArm64`）、Windows（`mingwX64`）の各ターゲットでプラットフォーム固有の C ライブラリや OS API に頼らず同一の挙動を提供する。
+English | [日本語](README.ja.md)
 
-## プロトコル仕様と設計
+An SMB2 / SMB3 client implementation for Kotlin Multiplatform. Built with the Kotlin Toolchain (`project.yaml` / `module.yaml`) instead of Gradle, it implements all protocol handling and cryptographic operations in common Kotlin code (`src/`) with only `ktor-network` and `kotlinx-io` as external dependencies. It provides identical behavior across JVM, Android, iOS (`iosArm64` / `iosSimulatorArm64`), macOS (`macosArm64`), Linux (`linuxX64` / `linuxArm64`), and Windows (`mingwX64`) without relying on platform-specific C libraries or OS APIs.
 
-対応ダイアレクトは SMB 2.0.2、2.1、3.0、3.0.2、3.1.1。SMB 3.1.1 ネゴシエーションでは Preauth Integrity Capabilities（`SHA-512`）と Encryption Capabilities（`AES-128-GCM` / `AES-128-CCM`）を交換し、認証には SPNEGO ラップされた NTLMSSP（NTLMv2、`NTLMSSP_NEGOTIATE_KEY_EXCH`、MIC 検証）およびゲスト・匿名セッションをサポートする。
+## Protocol Support and Design
 
-署名と暗号化に必要なプリミティブ（`MD4`、`MD5`、`HMAC-SHA256`、`SHA-512`、`RC4`、`AES-128-CMAC`、`AES-128-CCM`、`AES-128-GCM`）と NIST SP800-108 カウンタモード KDF はすべて `kmcifs-client` 内に実装されている。SMB 2.x では `HMAC-SHA256`、SMB 3.x では `AES-128-CMAC` によるパケット署名を行い、暗号化要求時や暗号化共有への接続時には Transform Header（`0xFD 'S' 'M' 'B'`）でパケット全体を保護する。大容量の動画ストリーミングのようにスループットが優先される場面では、`SmbEncryptionPolicy.NEGOTIATE` と `preferEncryption = false` を組み合わせることで、SMB 3.x の必須要件であるリクエスト署名を維持したままソフトウェア AES-GCM 復号の負荷を回避できる。
+Supported dialects are SMB 2.0.2, 2.1, 3.0, 3.0.2, and 3.1.1. During SMB 3.1.1 negotiation, the client exchanges Preauth Integrity Capabilities (`SHA-512`) and Encryption Capabilities (`AES-128-GCM` / `AES-128-CCM`). Authentication supports SPNEGO-wrapped NTLMSSP (NTLMv2, `NTLMSSP_NEGOTIATE_KEY_EXCH`, and MIC verification) as well as guest and anonymous sessions.
 
-ファイルシステム操作はディレクトリの走査、任意オフセットからのランダムリード・ライト、ファイル作成・削除・リネーム・サイズ変更、バイト範囲の排他・共有ロック（`SMB2 LOCK`）に対応する。`IPC$` 共有上の名前付きパイプ通信と `srvsvc` パイプ上の DCE/RPC（`NetrShareEnum`）を備えており、接続先サーバーの共有フォルダ一覧を直接列挙できる。
+All cryptographic primitives required for signing and encryption (`MD4`, `MD5`, `HMAC-SHA256`, `SHA-512`, `RC4`, `AES-128-CMAC`, `AES-128-CCM`, and `AES-128-GCM`) along with the NIST SP800-108 counter-mode KDF are implemented directly in `kmcifs-client`. Packet signing uses `HMAC-SHA256` for SMB 2.x and `AES-128-CMAC` for SMB 3.x. When encryption is required or when connecting to an encrypted share, entire packets are protected using the SMB 3.x Transform Header (`0xFD 'S' 'M' 'B'`). For throughput-critical workloads such as large video streaming, combining `SmbEncryptionPolicy.NEGOTIATE` with `preferEncryption = false` satisfies mandatory SMB 3.x request signing while avoiding the CPU overhead of software AES-GCM decryption on unencrypted shares.
 
-## モジュール構成
+Filesystem operations cover directory enumeration, random-offset reads and writes, file creation, deletion, renaming, truncation, and byte-range exclusive or shared locking (`SMB2 LOCK`). Named pipe communication over the `IPC$` share and DCE/RPC over the `srvsvc` pipe (`NetrShareEnum`) are also built in, allowing direct enumeration of shared folders on the target server.
 
-リポジトリはコアクライアントの `kmcifs-client` と、共通ブラウザ・ストリーミング基盤を持つ `sample` モジュール群で構成される。
+## Module Structure
 
-`sample` モジュールには、AES-128-GCM による接続情報の暗号化保存（`SmbCredentialCipher`）、256KB ブロック単位の LRU キャッシュとシーケンシャル先読みを備えたランダムアクセスストリーム（`SmbRandomAccessStream`）、ローカルループバック上で HTTP 1.1 `206 Partial Content` を返す Range ストリーミングサーバー（`SmbHttpRangeServer`）が含まれる。この共通基盤の上に、Android アプリ（`sample/androidApp`、Compose UI + LibVLC）、iOS アプリ（`sample/iosApp`、UIKit + AVPlayer）、Windows ネイティブ GUI アプリ（`sample/windowsApp`、Win32 API + 外部プレイヤー連携）、および CLI サンプル（`sample/jvmApp`、`sample/linuxApp`、`sample/macosApp`）を配置している。
+The repository consists of the core `kmcifs-client` library and the `sample` module suite, which provides a shared file browser and media streaming foundation.
 
-## ビルドと実行
+The common `sample` module includes AES-128-GCM encrypted credential storage (`SmbCredentialCipher`), a random-access stream with a 256KB block LRU cache and sequential prefetching (`SmbRandomAccessStream`), and a local loopback HTTP 1.1 Range streaming server returning `206 Partial Content` (`SmbHttpRangeServer`). Built on top of this shared layer are the Android app (`sample/androidApp`, Compose UI + LibVLC), the iOS app (`sample/iosApp`, UIKit + AVPlayer), the Windows native GUI app (`sample/windowsApp`, Win32 API + external player integration), and CLI samples (`sample/jvmApp`, `sample/linuxApp`, `sample/macosApp`).
 
-同梱の `kotlin`（Unix 系）または `kotlin.bat`（Windows）ラッパーからビルド、テスト、ローカル Maven リポジトリ（`mavenLocal`）への公開を行う。
+## Building and Running
+
+Use the bundled `kotlin` (Unix) or `kotlin.bat` (Windows) wrapper to build, run tests, and publish to the local Maven repository (`mavenLocal`).
 
 ```bash
-# 全モジュールのテスト実行
+# Run tests across all modules
 ./kotlin test
 
-# Dokka HTML API リファレンスの生成 (build/dokka/html/kmcifs-client/index.html)
+# Generate Dokka HTML API reference (build/dokka/html/kmcifs-client/index.html)
 ./kotlin do dokka
 
-# Zensical ドキュメントサイトのビルド (build/site/index.html) とローカルプレビュー
+# Build Zensical documentation site (English: build/site, Japanese: build/site/ja) and preview locally
 uvx --python 3.13 zensical build
+uvx --python 3.13 zensical build -f zensical.ja.toml
 uvx --python 3.13 zensical serve
 
-# mavenLocal への公開
+# Publish to mavenLocal
 ./kotlin publish mavenLocal
 
-# Windows ネイティブ GUI サンプルの起動 (Windows)
+# Launch the Windows native GUI sample (Windows)
 .\kotlin.bat run -m windowsApp
 
-# Android サンプルのビルド
+# Build the Android sample
 ./kotlin build -m androidApp
 ```
 
-### Kotlin Toolchain プロジェクトからの参照 (`module.yaml`)
+### Using from a Kotlin Toolchain project (`module.yaml`)
 
 ```yaml
 repositories:
@@ -51,7 +54,7 @@ dependencies:
   - com.sorrowblue.kmcifs:kmcifs-client:0.0.1
 ```
 
-### Gradle KMP プロジェクトからの参照 (`build.gradle.kts`)
+### Using from a Gradle KMP project (`build.gradle.kts`)
 
 ```kotlin
 kotlin {
@@ -63,9 +66,9 @@ kotlin {
 }
 ```
 
-## 基本的な使い方
+## Basic Usage
 
-### セッション確立と共有フォルダ一覧の取得
+### Establishing a Session and Listing Shares
 
 ```kotlin
 import com.sorrowblue.kmcifs.client.SmbClient
@@ -99,7 +102,7 @@ try {
 }
 ```
 
-### ファイル操作とランダムアクセス
+### File Operations and Random Access
 
 ```kotlin
 val share = client.connectShare("Documents")
@@ -111,7 +114,7 @@ try {
     share.writeText("reports/summary.txt", "Quarterly result")
     val text = share.readText("reports/summary.txt")
 
-    // Java の RandomAccessFile に相当するランダムアクセス操作
+    // Random-access operations modeled after java.io.RandomAccessFile
     val raf = share.openRandomAccessFile("reports/summary.txt", mode = "rw")
     try {
         println("length = ${raf.length}, position = ${raf.position}")

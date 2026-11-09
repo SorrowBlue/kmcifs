@@ -1,10 +1,10 @@
-# ファイルとディレクトリ操作
+# File & Directory Operations
 
-共有フォルダへの接続は `client.connectShare(shareName)` で行う。返される `SmbShare` インスタンスは SMB2 の `TREE_CONNECT` セッションを保持し、相対パスを指定したファイル・ディレクトリ操作を提供する。パスの区切り文字はスラッシュ（`/`）とバックスラッシュ（`\`）のどちらを渡しても内部で正規化される。
+Connect to a shared folder using `client.connectShare(shareName)`. The returned `SmbShare` instance holds the SMB2 `TREE_CONNECT` session and provides file and directory operations using relative paths. Both forward slashes (`/`) and backslashes (`\`) are accepted as path separators and normalized internally.
 
-## ディレクトリ走査とメタデータ取得
+## Directory Traversal and Metadata
 
-共有ルート直下の一覧を得るには `share.listDirectory("")` を呼び出す。内部では `FileIdBothDirectoryInformation`（Class 37）を用いた `SMB2 QUERY_DIRECTORY` をサーバーが `STATUS_NO_MORE_FILES` を返すまで繰り返し実行し、カレントディレクトリ（`.`）と親ディレクトリ（`..`）を除いたエントリ一覧を返す。
+To list entries directly under the share root, call `share.listDirectory("")`. Internally, this repeatedly executes `SMB2 QUERY_DIRECTORY` with `FileIdBothDirectoryInformation` (Class 37) until the server returns `STATUS_NO_MORE_FILES`, returning all entries except the current directory (`.`) and parent directory (`..`).
 
 ```kotlin
 val entries = share.listDirectory("Videos/Movies", pattern = "*")
@@ -17,35 +17,35 @@ for (entry in entries) {
 }
 ```
 
-特定のパスが存在するかどうかの確認には `share.exists(path)`、サイズやタイムスタンプ・属性フラグの取得には `share.stat(path)` を使う。`exists` は `STATUS_OBJECT_NAME_NOT_FOUND` や `STATUS_OBJECT_PATH_NOT_FOUND`、`STATUS_NO_SUCH_FILE` を捕捉して `false` に変換し、権限不足（`STATUS_ACCESS_DENIED`）などの異常系はそのまま `SmbException` として送出する。
+Use `share.exists(path)` to check whether a path exists, and `share.stat(path)` to inspect its size, timestamps, and attribute flags. `exists` catches `STATUS_OBJECT_NAME_NOT_FOUND`, `STATUS_OBJECT_PATH_NOT_FOUND`, and `STATUS_NO_SUCH_FILE` and returns `false`, while propagating other errors such as insufficient permissions (`STATUS_ACCESS_DENIED`) as an `SmbException`.
 
-## 一括読み書き・作成・削除・リネーム
+## One-Shot Read, Write, Create, Delete, and Rename
 
-小さな設定ファイルやテキストファイルを丸ごと読み書きする用途には、`SmbShare` のユーティリティメソッドを直接呼び出すのが簡潔である。
+For reading or writing small configuration or text files in a single call, use the convenience methods on `SmbShare`:
 
 ```kotlin
-// テキストの書き込み（overwrite = true なら FILE_OVERWRITE_IF）
+// Write text (uses FILE_OVERWRITE_IF when overwrite = true)
 share.writeText("config/settings.json", """{"theme":"dark"}""", overwrite = true)
 
-// テキスト・バイト配列の読み取り
+// Read text or raw bytes
 val json = share.readText("config/settings.json")
 val rawBytes = share.readBytes("config/settings.json")
 
-// 末尾への追記（ファイルがなければ新規作成）
+// Append bytes to the end of a file (creates the file if it does not exist)
 share.appendBytes("logs/app.log", "Started\n".encodeToByteArray())
 
-// ディレクトリ作成・リネーム・削除
+// Create, rename, and delete directories and files
 share.createDirectory("archive")
 share.rename("config/settings.json", "archive/settings.bak", replaceIfExists = true)
 share.deleteFile("archive/settings.bak")
 share.deleteDirectory("archive")
 ```
 
-## 低レベルファイルハンドル (`SmbFile`) と排他ロック
+## Low-Level File Handles (`SmbFile`) and Byte-Range Locks
 
-Windows / SMB のアクセス権マスク（`SmbAccessMask`）、共有モード（`SmbShareAccess`）、生成オプション（`SmbCreateDisposition`）を細かく制御してファイルを開く場合は `share.openFile` を使う。
+Use `share.openFile` when you need fine-grained control over Windows / SMB access masks (`SmbAccessMask`), share access modes (`SmbShareAccess`), and creation dispositions (`SmbCreateDisposition`).
 
-他プロセスからの同時オープン自体を拒否したい場合は `shareAccess = SmbShareAccess.EXCLUSIVE` を渡す。ファイルを開いたまま特定のバイト範囲だけを排他ロックまたは共有ロックしたい場合は、`SmbFile.lock` と `SmbFile.unlock`（`SMB2 LOCK`）を使用する。
+Pass `shareAccess = SmbShareAccess.EXCLUSIVE` to prevent other processes from opening the file concurrently. To acquire an exclusive or shared lock on a specific byte range while keeping the file open, use `SmbFile.lock` and `SmbFile.unlock` (`SMB2 LOCK`).
 
 ```kotlin
 import com.sorrowblue.kmcifs.client.protocol.SmbAccessMask
@@ -60,7 +60,7 @@ val file = share.openFile(
 )
 
 try {
-    // 先頭 4096 バイトに対して排他ロックを取得（競合時は待機せず即座にエラーとする）
+    // Acquire an exclusive lock on the first 4096 bytes (fail immediately on conflict)
     file.lock(offset = 0L, length = 4096L, exclusive = true, failImmediately = true)
     try {
         val header = file.read(offset = 0L, length = 64)

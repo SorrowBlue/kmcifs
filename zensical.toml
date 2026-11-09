@@ -4,17 +4,18 @@ site_name = "kmcifs"
 site_description = "Kotlin Multiplatform SMB2 / SMB3 Client Library"
 site_author = "SorrowBlue"
 site_dir = "build/site"
+exclude_docs = "ja/**"
 
 nav = [
-  { "概要と導入" = "index.md" },
-  { "接続・認証・暗号化" = "connection.md" },
-  { "ファイルとディレクトリ操作" = "file-operations.md" },
-  { "ランダムアクセスとストリーミング" = "random-access.md" },
-  { "サンプルアプリケーション" = "sample-apps.md" },
+  { "Overview & Getting Started" = "index.md" },
+  { "Connection, Auth & Encryption" = "connection.md" },
+  { "File & Directory Operations" = "file-operations.md" },
+  { "Random Access & Streaming" = "random-access.md" },
+  { "Sample Applications" = "sample-apps.md" },
 ]
 
 [project.theme]
-language = "ja"
+language = "en"
 features = [
   "announce.dismiss",
   "content.code.annotate",
@@ -37,19 +38,29 @@ features = [
 [[project.theme.palette]]
 media = "(prefers-color-scheme)"
 toggle.icon = "lucide/sun-moon"
-toggle.name = "ライトモードへ切り替え"
+toggle.name = "Switch to light mode"
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme: light)"
 scheme = "default"
 toggle.icon = "lucide/sun"
-toggle.name = "ダークモードへ切り替え"
+toggle.name = "Switch to dark mode"
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme: dark)"
 scheme = "slate"
 toggle.icon = "lucide/moon"
-toggle.name = "システム設定に合わせる"
+toggle.name = "Switch to system preference"
+
+[[project.extra.alternate]]
+name = "English"
+link = "."
+lang = "en"
+
+[[project.extra.alternate]]
+name = "日本語"
+link = "ja/"
+lang = "ja"
 
 [project.markdown_extensions]
 abbr = {}

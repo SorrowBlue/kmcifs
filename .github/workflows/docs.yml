@@ -7,6 +7,7 @@ on:
     paths:
       - "docs/**"
       - "zensical.toml"
+      - "zensical.ja.toml"
       - "plugins/dokka/**"
       - "kotlin"
       - "kotlin.bat"
@@ -18,6 +19,7 @@ on:
     paths:
       - "docs/**"
       - "zensical.toml"
+      - "zensical.ja.toml"
       - "plugins/dokka/**"
       - "kotlin"
       - "kotlin.bat"
@@ -56,6 +58,7 @@ jobs:
             zensical:
               - 'docs/**'
               - 'zensical.toml'
+              - 'zensical.ja.toml'
               - '.github/workflows/docs.yml'
             dokka:
               - 'plugins/dokka/**'
@@ -95,7 +98,9 @@ jobs:
           enable-cache: true
 
       - name: Build Zensical documentation site
-        run: uvx --python 3.13 zensical build --strict --clean
+        run: |
+          uvx --python 3.13 zensical build --strict --clean
+          uvx --python 3.13 zensical build --strict --clean -f zensical.ja.toml
 
       - name: Upload Zensical artifact
         if: needs.changes.outputs.deploy == 'true'
