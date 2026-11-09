@@ -169,6 +169,7 @@ jobs:
       - name: Determine comparison baseline
         id: baseline
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
         run: |
@@ -197,6 +198,7 @@ jobs:
 
       - name: Upload sample executables to draft release
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: gh release upload "$TAG" dist/* --clobber
@@ -238,6 +240,7 @@ jobs:
     steps:
       - name: Publish immutable GitHub Release and trigger documentation deployment
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
           IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}

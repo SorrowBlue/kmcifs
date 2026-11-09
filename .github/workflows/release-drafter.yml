@@ -32,6 +32,7 @@ jobs:
       - name: Determine comparison baseline
         id: baseline
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           LATEST_RELEASE=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1)
