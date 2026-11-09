@@ -1,5 +1,10 @@
 # kmcifs
 
+[![Maven Central Version](https://img.shields.io/maven-central/v/com.sorrowblue.kmcifs/kmcifs-client)](https://central.sonatype.com/artifact/com.sorrowblue.kmcifs/kmcifs-client)
+[![GitHub Release](https://img.shields.io/github/v/release/SorrowBlue/kmcifs)](https://github.com/SorrowBlue/kmcifs/releases)
+[![CI](https://github.com/SorrowBlue/kmcifs/actions/workflows/ci.yml/badge.svg)](https://github.com/SorrowBlue/kmcifs/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+
 [English](README.md) | 日本語
 
 Kotlin Multiplatform 向けの SMB2 / SMB3 クライアント実装。ビルドシステムには Gradle ではなく Kotlin Toolchain（`project.yaml` / `module.yaml`）を採用し、`ktor-network` と `kotlinx-io` のみを外部依存として共通 Kotlin コード（`src/`）だけでプロトコル処理と暗号演算を完結させている。JVM、Android、iOS（`iosArm64` / `iosSimulatorArm64`）、macOS（`macosArm64`）、Linux（`linuxX64` / `linuxArm64`）、Windows（`mingwX64`）の各ターゲットでプラットフォーム固有の C ライブラリや OS API に頼らず同一の挙動を提供する。
@@ -51,7 +56,7 @@ repositories:
   - url: mavenLocal
 
 dependencies:
-  - com.sorrowblue.kmcifs:kmcifs-client:0.0.1
+  - com.sorrowblue.kmcifs:kmcifs-client:<version>
 ```
 
 ### Gradle KMP プロジェクトからの参照 (`build.gradle.kts`)
@@ -60,7 +65,7 @@ dependencies:
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("com.sorrowblue.kmcifs:kmcifs-client:0.0.1")
+            implementation("com.sorrowblue.kmcifs:kmcifs-client:<version>")
         }
     }
 }

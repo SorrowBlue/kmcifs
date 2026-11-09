@@ -99,6 +99,10 @@ jobs:
 
       - name: Build Zensical documentation site
         run: |
+          VERSION=$(sed -nE 's/^ *version: *([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?).*/\1/p' kmcifs-client/module.yaml | head -n 1)
+          if [ -n "$VERSION" ] && [ "${VERSION%%-*}" != "0.0.0" ]; then
+            sed -i "s/<version>/${VERSION}/g" docs/index.md docs/ja/index.md
+          fi
           uvx --python 3.13 zensical build --strict --clean
           uvx --python 3.13 zensical build --strict --clean -f zensical.ja.toml
 

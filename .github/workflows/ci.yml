@@ -84,6 +84,21 @@ jobs:
       - name: Build targets and sample apps
         run: ${{ matrix.cmd }}
 
+  ci-success:
+    name: CI Success
+    needs: [verify-lock, test, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all CI jobs succeeded
+        run: |
+          if [ "${{ needs.verify-lock.result }}" != "success" ] || \
+             [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.build.result }}" != "success" ]; then
+            echo "::error::One or more CI jobs failed or were cancelled (verify-lock=${{ needs.verify-lock.result }}, test=${{ needs.test.result }}, build=${{ needs.build.result }})."
+            exit 1
+          fi
+
   publish-snapshot:
     name: Publish SNAPSHOT to Maven Central
     needs: [test, build]

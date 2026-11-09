@@ -30,7 +30,7 @@ settings:
   publishing:
     enabled: true
     group: com.sorrowblue.kmcifs
-    version: 0.0.0
+    version: 0.1.0
     artifactId: kmcifs-client
     publishSources: true
     signArtifacts: true

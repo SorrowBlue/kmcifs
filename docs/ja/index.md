@@ -1,5 +1,8 @@
 # kmcifs
 
+[![Maven Central Version](https://img.shields.io/maven-central/v/com.sorrowblue.kmcifs/kmcifs-client)](https://central.sonatype.com/artifact/com.sorrowblue.kmcifs/kmcifs-client)
+[![GitHub Release](https://img.shields.io/github/v/release/SorrowBlue/kmcifs)](https://github.com/SorrowBlue/kmcifs/releases)
+
 `kmcifs` は Kotlin Multiplatform 向けの SMB2 / SMB3 クライアントライブラリである。プラットフォーム固有のネイティブライブラリや OS 依存の暗号 API を一切使わず、`ktor-network` と `kotlinx-io` のみを土台として共通 Kotlin コードだけでプロトコル処理と暗号演算を実装している。
 
 対応ターゲットは JVM、Android（`minSdk 26`）、iOS（`iosArm64` / `iosSimulatorArm64`）、macOS（`macosArm64`）、Linux（`linuxX64` / `linuxArm64`）、Windows（`mingwX64`）の 8 環境。いずれのターゲットでも同一の API と通信挙動を提供する。クラス・メソッド単位の網羅的な仕様は [Dokka API リファレンス](../api/index.html) を参照。
@@ -25,7 +28,7 @@ repositories:
   - url: mavenLocal
 
 dependencies:
-  - com.sorrowblue.kmcifs:kmcifs-client:0.0.1
+  - com.sorrowblue.kmcifs:kmcifs-client:<version>
 ```
 
 Gradle ベースの Kotlin Multiplatform プロジェクトから利用する場合は `build.gradle.kts` の `commonMain` に追加する。
@@ -39,7 +42,7 @@ repositories {
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("com.sorrowblue.kmcifs:kmcifs-client:0.0.1")
+            implementation("com.sorrowblue.kmcifs:kmcifs-client:<version>")
         }
     }
 }
