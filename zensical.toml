@@ -3,6 +3,9 @@ site_url = "https://sorrowblue.com/kmcifs/"
 site_name = "kmcifs"
 site_description = "Kotlin Multiplatform SMB2 / SMB3 Client Library"
 site_author = "SorrowBlue"
+repo_url = "https://github.com/SorrowBlue/kmcifs"
+repo_name = "SorrowBlue/kmcifs"
+edit_uri = "edit/main/docs/"
 site_dir = "build/site"
 exclude_docs = "ja/**"
 
@@ -34,6 +37,9 @@ features = [
   "navigation.tracking",
   "search.highlight",
 ]
+
+[project.theme.icon]
+repo = "fontawesome/brands/github"
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme)"
