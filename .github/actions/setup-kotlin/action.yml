@@ -9,13 +9,16 @@ inputs:
 
 outputs:
   version:
-    description: "Current module version from kmcifs-client/module.yaml (e.g. 0.0.1)"
+    description: "Current module version from kmcifs-client/module.yaml (e.g. 0.0.1 or 0.1.0-beta.1)"
     value: ${{ steps.meta.outputs.version }}
   tag:
-    description: "Release tag corresponding to current version (e.g. v0.0.1)"
+    description: "Release tag corresponding to current version (e.g. v0.0.1 or v0.1.0-beta.1)"
     value: ${{ steps.meta.outputs.tag }}
+  is_prerelease:
+    description: "Whether the current version has a pre-release suffix (e.g. true for 0.1.0-beta.1)"
+    value: ${{ steps.meta.outputs.is_prerelease }}
   snapshot_version:
-    description: "Next patch SNAPSHOT version (e.g. 0.0.2-SNAPSHOT)"
+    description: "Next SNAPSHOT version (e.g. 0.0.2-SNAPSHOT or 0.1.0-SNAPSHOT)"
     value: ${{ steps.meta.outputs.snapshot_version }}
 
 runs:
@@ -31,17 +34,26 @@ runs:
           chmod +x ./kotlin
         fi
 
-        VERSION=$(sed -nE 's/^ *version: *([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' kmcifs-client/module.yaml | head -n 1)
+        VERSION=$(sed -nE 's/^ *version: *([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?).*/\1/p' kmcifs-client/module.yaml | head -n 1)
         if [ -z "$VERSION" ]; then
           echo "::error::Failed to parse version from kmcifs-client/module.yaml"
           exit 1
         fi
 
-        IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-        NEXT_PATCH=$((PATCH + 1))
+        BASE_VERSION="${VERSION%%-*}"
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+        if [[ "$VERSION" == *-* ]]; then
+          IS_PRERELEASE="true"
+          SNAPSHOT_VERSION="${BASE_VERSION}-SNAPSHOT"
+        else
+          IS_PRERELEASE="false"
+          NEXT_PATCH=$((PATCH + 1))
+          SNAPSHOT_VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-SNAPSHOT"
+        fi
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
-        echo "snapshot_version=${MAJOR}.${MINOR}.${NEXT_PATCH}-SNAPSHOT" >> "$GITHUB_OUTPUT"
+        echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
+        echo "snapshot_version=${SNAPSHOT_VERSION}" >> "$GITHUB_OUTPUT"
 
         case "$RUNNER_OS" in
           Linux)

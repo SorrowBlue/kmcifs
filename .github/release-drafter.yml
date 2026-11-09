@@ -1,0 +1,165 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+tag-prefix: "v"
+change-template: "- $TITLE (#$NUMBER) $AUTHORS"
+change-title-escapes: '\<*_&'
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  ## New Contributors
+
+  $NEW_CONTRIBUTORS
+
+  **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...$RESOLVED_TAG
+
+categories:
+  - title: "💥 Breaking Changes"
+    semver-increment: "major"
+    exclusive: true
+    when:
+      - conventional:
+          breaking: true
+      - label: "breaking"
+  - title: "🚀 Features"
+    semver-increment: "minor"
+    exclusive: true
+    when:
+      - conventional:
+          type: "feat"
+      - labels:
+          - "enhancement"
+          - "feature"
+  - title: "⚡ Performance"
+    semver-increment: "patch"
+    exclusive: true
+    when:
+      - conventional:
+          type: "perf"
+      - label: "performance"
+  - title: "⬆️ Dependencies"
+    semver-increment: "patch"
+    exclusive: true
+    collapse-after: 5
+    when:
+      - conventional:
+          scopes:
+            - "deps"
+            - "deps-dev"
+          types:
+            - "build"
+            - "chore"
+            - "ci"
+            - "fix"
+      - label: "dependencies"
+  - title: "🐛 Bug Fixes"
+    semver-increment: "patch"
+    exclusive: true
+    when:
+      - conventional:
+          type: "fix"
+      - labels:
+          - "bug"
+          - "bugfix"
+          - "fix"
+  - title: "📚 Documentation"
+    semver-increment: "patch"
+    exclusive: true
+    when:
+      - conventional:
+          type: "docs"
+      - label: "documentation"
+  - title: "🧰 Maintenance"
+    semver-increment: "patch"
+    exclusive: true
+    when:
+      - conventional:
+          types:
+            - "build"
+            - "chore"
+            - "ci"
+            - "refactor"
+            - "revert"
+            - "style"
+            - "test"
+      - labels:
+          - "chore"
+          - "maintenance"
+  - title: "📝 Other Changes"
+  - type: "pre-exclude"
+    when:
+      label: "skip-changelog"
+
+replacers:
+  - search: '/\/compare\/\.\.\.\$RESOLVED_TAG/g'
+    replace: "/commits/$RESOLVED_TAG"
+
+sync-labels: true
+autolabeler:
+  - labels:
+      - "breaking"
+    title:
+      - '/^[a-z]+(?:\([^)]+\))?!: /'
+    body:
+      - '/^BREAKING[ -]CHANGE: /m'
+  # 1. Match dependency updates and bot branches first, and by Conventional Commits PR title
+  - labels:
+      - "dependencies"
+    stop-on-match: true
+    branch:
+      - '/^renovate\//'
+      - '/^dependabot\//'
+    title:
+      - '/^(?:build|chore|ci|fix)\(deps(?:-dev)?\)!?: /'
+  - labels:
+      - "enhancement"
+    stop-on-match: true
+    title:
+      - '/^feat(?:\([^)]+\))?!?: /'
+  - labels:
+      - "bug"
+    stop-on-match: true
+    title:
+      - '/^fix(?:\((?!deps(?:-dev)?\))[^)]+\))?!?: /'
+  - labels:
+      - "performance"
+    stop-on-match: true
+    title:
+      - '/^perf(?:\([^)]+\))?!?: /'
+  - labels:
+      - "documentation"
+    stop-on-match: true
+    title:
+      - '/^docs(?:\([^)]+\))?!?: /'
+  - labels:
+      - "chore"
+    stop-on-match: true
+    title:
+      - '/^(?:build|chore|ci|refactor|revert|style|test)(?:\((?!deps(?:-dev)?\))[^)]+\))?!?: /'
+  # 2. Fallback to branch prefix when PR title is not in Conventional Commits format
+  - labels:
+      - "enhancement"
+    stop-on-match: true
+    branch:
+      - '/^feat(?:ure)?\//'
+  - labels:
+      - "bug"
+    stop-on-match: true
+    branch:
+      - '/^(?:bug)?fix\//'
+  - labels:
+      - "performance"
+    stop-on-match: true
+    branch:
+      - '/^perf\//'
+  - labels:
+      - "documentation"
+    stop-on-match: true
+    branch:
+      - '/^docs?\//'
+  - labels:
+      - "chore"
+    stop-on-match: true
+    branch:
+      - '/^(?:build|chore|ci|refactor|revert|style|test)\//'

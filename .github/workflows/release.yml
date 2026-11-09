@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - ".github/actions/setup-kotlin/**"
+      - ".github/release-drafter.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/actions.lock"
   workflow_dispatch:
@@ -25,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       is_release: ${{ steps.meta.outputs.is_release }}
+      is_prerelease: ${{ steps.kotlin.outputs.is_prerelease }}
       tag: ${{ steps.kotlin.outputs.tag }}
       version: ${{ steps.kotlin.outputs.version }}
     steps:
@@ -58,8 +60,8 @@ jobs:
             exit 1
           fi
 
-          if [ "$VERSION" = "0.0.0" ]; then
-            echo "::error::Version '0.0.0' cannot be released. Please update 'version' in kmcifs-client/module.yaml (e.g. to '0.0.1') before running Release."
+          if [ "${VERSION%%-*}" = "0.0.0" ]; then
+            echo "::error::Version '${VERSION}' cannot be released. Please update 'version' in kmcifs-client/module.yaml (e.g. to '0.0.1') before running Release."
             exit 1
           fi
 
@@ -69,20 +71,21 @@ jobs:
           fi
 
           LATEST_VERSION=$(git ls-remote --tags --refs origin "refs/tags/v[0-9]*.[0-9]*.[0-9]*" \
-            | awk '{sub("refs/tags/v", "", $2); print $2}' \
+            | awk '{sub("refs/tags/v", "", $2); sub("-", "~", $2); print $2}' \
             | sort -V \
-            | tail -n 1)
+            | tail -n 1 \
+            | tr '~' '-')
 
           if [ -n "$LATEST_VERSION" ]; then
-            HIGHEST=$(printf '%s\n%s\n' "$LATEST_VERSION" "$VERSION" | sort -V | tail -n 1)
+            HIGHEST=$(printf '%s\n%s\n' "${LATEST_VERSION/-/\~}" "${VERSION/-/\~}" | sort -V | tail -n 1 | tr '~' '-')
             if [ "$VERSION" = "$LATEST_VERSION" ] || [ "$HIGHEST" != "$VERSION" ]; then
               echo "::error::Version '${VERSION}' in kmcifs-client/module.yaml must be newer than the latest released version 'v${LATEST_VERSION}'."
               exit 1
             fi
           fi
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::GitHub Release '$TAG' already exists."
+          if [ "$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null)" = "false" ]; then
+            echo "::error::Published GitHub Release '$TAG' already exists."
             exit 1
           fi
 
@@ -140,19 +143,72 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  publish-release:
-    name: Publish to Maven Central & GitHub Release
+  prepare-release:
+    name: Prepare Draft Release & Attest Provenance
     needs: [prepare, build-samples]
     if: needs.prepare.outputs.is_release == 'true'
     runs-on: ubuntu-latest
-    environment:
-      name: release
-      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}
     permissions:
       contents: write
-      actions: write
+      pull-requests: read
       id-token: write
       attestations: write
+    steps:
+      - name: Download sample executables
+        uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: samples-*
+          path: dist
+          merge-multiple: true
+
+      - name: Attest build provenance for sample executables
+        uses: actions/attest-build-provenance@v4.2.2
+        with:
+          subject-path: "dist/*"
+
+      - name: Determine comparison baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
+        run: |
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            LATEST_RELEASE=$(gh release list --exclude-drafts --limit 1)
+          else
+            LATEST_RELEASE=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1)
+          fi
+          if [ -z "$LATEST_RELEASE" ]; then
+            echo "from=f3139f20318a93218532514618d551ae2e18d586" >> "$GITHUB_OUTPUT"
+          else
+            echo "from=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update draft release with Release Drafter
+        uses: release-drafter/release-drafter@v7.10.0
+        with:
+          config-name: release-drafter.yml
+          version: ${{ needs.prepare.outputs.version }}
+          tag: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.tag }}
+          commitish: ${{ github.sha }}
+          from: ${{ steps.baseline.outputs.from }}
+          include-pre-releases: ${{ needs.prepare.outputs.is_prerelease }}
+          publish: false
+
+      - name: Upload sample executables to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release upload "$TAG" dist/* --clobber
+
+  publish-maven:
+    name: Publish to Maven Central
+    needs: [prepare, prepare-release]
+    if: needs.prepare.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
@@ -168,35 +224,36 @@ jobs:
           KOTLIN_TOOLCHAIN_SIGNING_KEY_PASSPHRASE: ${{ secrets.SIGNING_KEY_PASSPHRASE }}
         run: ./kotlin publish mavenCentral -m kmcifs-client
 
-      - name: Download sample executables
-        uses: actions/download-artifact@v8.0.2
-        with:
-          pattern: samples-*
-          path: dist
-          merge-multiple: true
-
-      - name: Attest build provenance for sample executables
-        uses: actions/attest-build-provenance@v4.2.2
-        with:
-          subject-path: "dist/*"
-
-      - name: Create Tag and Publish Immutable GitHub Release
+  publish-release:
+    name: Publish GitHub Release & Deploy Docs
+    needs: [prepare, prepare-release, publish-maven]
+    if: needs.prepare.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Publish immutable GitHub Release and trigger documentation deployment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "refs/tags/$TAG"
+          IS_DRAFT=$(gh release view "$TAG" --json isDraft --jq '.isDraft')
+          if [ "$IS_DRAFT" = "true" ]; then
+            if [ "$IS_PRERELEASE" = "true" ]; then
+              gh release edit "$TAG" --draft=false --prerelease --latest=false
+            else
+              gh release edit "$TAG" --draft=false --prerelease=false --latest
+            fi
+            echo "Published immutable release: $TAG (prerelease=$IS_PRERELEASE)"
+          else
+            echo "Release $TAG is already published; skipping publish step."
+          fi
 
-          gh release create "$TAG" \
-            --draft \
-            --verify-tag \
-            --title "$TAG" \
-            --generate-notes
-
-          gh release upload "$TAG" dist/* --clobber
-          gh release edit "$TAG" --draft=false
-          echo "Published immutable release: $TAG"
-          gh workflow run docs.yml
+          if [ "$IS_PRERELEASE" != "true" ]; then
+            gh workflow run docs.yml
+          fi

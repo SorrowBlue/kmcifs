@@ -1,0 +1,61 @@
+name: Release Drafter
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-drafter-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  update-release-draft:
+    name: Update Release Draft
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Determine comparison baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST_RELEASE=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1)
+          if [ -z "$LATEST_RELEASE" ]; then
+            echo "from=f3139f20318a93218532514618d551ae2e18d586" >> "$GITHUB_OUTPUT"
+          else
+            echo "from=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Draft release notes
+        uses: release-drafter/release-drafter@v7.10.0
+        with:
+          config-name: release-drafter.yml
+          from: ${{ steps.baseline.outputs.from }}
+
+  autolabeler:
+    name: Auto Label Pull Request
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Run Autolabeler
+        uses: release-drafter/release-drafter/autolabeler@v7.10.0
+        with:
+          config-name: release-drafter.yml
