@@ -2,3 +2,7 @@ product: jvm/app
 
 dependencies:
   - //sample
+
+settings:
+  jvm:
+    release: 11
