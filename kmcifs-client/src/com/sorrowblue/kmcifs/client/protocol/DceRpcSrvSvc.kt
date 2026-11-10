@@ -3,7 +3,6 @@ package com.sorrowblue.kmcifs.client.protocol
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.decodeFromUtf16LE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.encodeToUtf16LE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readUIntLE
-import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readUShortLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUIntLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUShortLE
 
@@ -182,13 +181,13 @@ internal object DceRpcSrvSvc {
         }
 
         val shares = ArrayList<SmbShareInfo>(rawEntries.size)
-        for (entry in rawEntries) {
-            val name = if (entry.namePtr != 0u) readNdrString() else ""
-            val comment = if (entry.remarkPtr != 0u) readNdrString() else ""
+        for ((namePtr, type, remarkPtr) in rawEntries) {
+            val name = if (namePtr != 0u) readNdrString() else ""
+            val comment = if (remarkPtr != 0u) readNdrString() else ""
             shares.add(
                 SmbShareInfo(
                     name = name,
-                    rawType = entry.type,
+                    rawType = type,
                     comment = comment
                 )
             )
