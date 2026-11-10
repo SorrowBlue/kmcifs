@@ -39,17 +39,27 @@ import io.ktor.network.sockets.openReadChannel
 import io.ktor.network.sockets.openWriteChannel
 import io.ktor.utils.io.readFully
 import io.ktor.utils.io.writeFully
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.io.readByteArray
 import kotlinx.io.readString
 import kotlinx.io.writeString
 import kotlin.test.Test
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -936,6 +946,445 @@ class SmbClientEndToEndTest {
     }
 
     @Test
+    fun testAsyncPipeliningOutOfOrderResponsesAndCreditFlowControl() = runTest {
+        val creds = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
+        val backend = MockSmb3ServerTransport(creds, encryptShare = true)
+
+        // 1. Out-of-order pipelining transport: holds 4 concurrent READ requests until ALL 4 arrive on the wire,
+        //    proving requests are pipelined without waiting for prior responses, then flushes responses in reverse order (4 -> 3 -> 2 -> 1).
+        val barrierMutex = Mutex()
+        var holdReads = false
+        val heldResponses = ArrayList<ByteArray>(4)
+        val outOfOrderChannel = Channel<ByteArray>(Channel.UNLIMITED)
+        val allFourSent = CompletableDeferred<Unit>()
+
+        val pipeliningTransport = object : SmbPacketTransport {
+            override suspend fun sendPacket(packet: ByteArray) {
+                barrierMutex.withLock {
+                    backend.sendPacket(packet)
+                    val produced = ArrayList<ByteArray>()
+                    while (backend.hasPendingResponses()) {
+                        produced.add(backend.receivePacket())
+                    }
+                    if (holdReads) {
+                        heldResponses.addAll(produced)
+                        if (heldResponses.size == 4) {
+                            for (resp in heldResponses.asReversed()) {
+                                outOfOrderChannel.trySend(resp)
+                            }
+                            heldResponses.clear()
+                            allFourSent.complete(Unit)
+                        }
+                    } else {
+                        for (resp in produced) {
+                            outOfOrderChannel.trySend(resp)
+                        }
+                    }
+                }
+            }
+
+            override suspend fun receivePacket(): ByteArray = outOfOrderChannel.receive()
+
+            override fun close() {
+                outOfOrderChannel.close()
+                backend.close()
+            }
+        }
+
+        withContext(Dispatchers.Default) {
+            val client = SmbClient(
+                host = "192.168.1.10",
+                port = 445,
+                config = SmbConfig(encryptionPolicy = SmbEncryptionPolicy.REQUIRED),
+                transport = pipeliningTransport,
+                readerDispatcher = Dispatchers.IO,
+            )
+            client.initializeSession(creds)
+            val share = client.connectShare("PublicDocs")
+
+            val payload = ByteArray(4096) { idx -> ((idx * 29 + 3) and 0xFF).toByte() }
+            share.writeBytes("data/pipelined.bin", payload)
+            val openFile = share.openFile("data/pipelined.bin")
+
+            barrierMutex.withLock {
+                holdReads = true
+            }
+            val readJobs = (0 until 4).map { chunkIdx ->
+                async {
+                    openFile.read(chunkIdx * 1024L, 1024)
+                }
+            }
+            allFourSent.await()
+            val results = readJobs.awaitAll()
+            barrierMutex.withLock {
+                holdReads = false
+            }
+
+            for (chunkIdx in 0 until 4) {
+                assertContentEquals(
+                    payload.copyOfRange(chunkIdx * 1024, (chunkIdx + 1) * 1024),
+                    results[chunkIdx],
+                )
+            }
+
+            openFile.closeSuspend()
+            share.closeSuspend()
+            client.closeSuspend()
+        }
+
+        // 2. Credit flow control: server grants only 1 credit per response, throttling 6 concurrent compound/single requests cleanly in FIFO order
+        val stingyBackend = MockSmb3ServerTransport(creds, encryptShare = false, creditsGrantedPerResponse = 1u)
+        withContext(Dispatchers.Default) {
+            val client = SmbClient(
+                host = "192.168.1.10",
+                port = 445,
+                config = SmbConfig(encryptionPolicy = SmbEncryptionPolicy.DISABLED),
+                transport = stingyBackend,
+                readerDispatcher = Dispatchers.IO,
+            )
+            client.initializeSession(creds)
+            val share = client.connectShare("PublicDocs")
+            for (i in 0 until 6) {
+                share.writeText("notes/c_$i.txt", "Credit-$i")
+            }
+            val results = (0 until 6).map { i ->
+                async {
+                    share.readText("notes/c_$i.txt")
+                }
+            }.awaitAll()
+            for (i in 0 until 6) {
+                assertEquals("Credit-$i", results[i])
+            }
+            // Server refuses >1 credit even on ECHO: a 2-credit compound stat() must fail fast with STATUS_INSUFFICIENT_RESOURCES rather than deadlocking
+            val capEx = assertFailsWith<SmbException> {
+                share.stat("notes/c_0.txt")
+            }
+            assertEquals(NtStatus.STATUS_INSUFFICIENT_RESOURCES, capEx.ntStatus)
+            share.closeSuspend()
+            client.closeSuspend()
+        }
+
+        // 3. Automatic SMB2 ECHO credit replenishment when idle with 1 credit and concurrent multi-credit compound requests ([W1=2, W2=3]) arrive
+        val echoReplenishBackend = MockSmb3ServerTransport(
+            expectedCredentials = creds,
+            encryptShare = false,
+            creditsGrantedPerResponse = 1u,
+            echoCreditsGranted = 3u,
+        )
+        withContext(Dispatchers.Default) {
+            val client = SmbClient(
+                host = "192.168.1.10",
+                port = 445,
+                config = SmbConfig(encryptionPolicy = SmbEncryptionPolicy.DISABLED),
+                transport = echoReplenishBackend,
+                readerDispatcher = Dispatchers.IO,
+            )
+            client.initializeSession(creds)
+            val share = client.connectShare("PublicDocs")
+            share.writeText("notes/to_delete.txt", "temp")
+            // Concurrent 2-credit stat() and 3-credit deleteFile() when availableCredits == 1;
+            // first ECHO grants 3 credits (waking W1 and leaving 1 credit == creditsBefore), second ECHO wakes W2
+            val w1 = async { share.exists("notes/missing.txt") }
+            val w2 = async { share.deleteFile("notes/to_delete.txt") }
+            assertFalse(w1.await())
+            w2.await()
+            assertFalse(share.exists("notes/to_delete.txt"))
+            share.closeSuspend()
+            client.closeSuspend()
+        }
+
+        // 4. Request timeout surfaces as SmbException(STATUS_IO_TIMEOUT) instead of CancellationException
+        val blackholeBackend = MockSmb3ServerTransport(creds, encryptShare = false)
+        var dropNextSend = false
+        val timeoutTransport = object : SmbPacketTransport {
+            override suspend fun sendPacket(packet: ByteArray) {
+                if (!dropNextSend) {
+                    blackholeBackend.sendPacket(packet)
+                }
+            }
+            override suspend fun receivePacket(): ByteArray = blackholeBackend.receivePacket()
+            override fun close() = blackholeBackend.close()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SmbConfig(connectTimeout = 0.seconds)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SmbConfig(requestTimeout = (-1).seconds)
+        }
+        withContext(Dispatchers.Default) {
+            val client = SmbClient(
+                host = "192.168.1.10",
+                port = 445,
+                config = SmbConfig(
+                    encryptionPolicy = SmbEncryptionPolicy.DISABLED,
+                    requestTimeout = 80.milliseconds,
+                ),
+                transport = timeoutTransport,
+                readerDispatcher = Dispatchers.IO,
+            )
+            client.initializeSession(creds)
+            dropNextSend = true
+            val timeoutEx = assertFailsWith<SmbException> {
+                client.connectShare("PublicDocs")
+            }
+            assertEquals(NtStatus.STATUS_IO_TIMEOUT, timeoutEx.ntStatus)
+            assertTrue(client.isClosed)
+        }
+    }
+
+    @Test
+    fun testCoroutineCancellationAndRandomAccessCallerJobAbort() = runTest {
+        val creds = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
+        val backend = MockSmb3ServerTransport(creds, encryptShare = true)
+
+        val gateMutex = Mutex()
+        var holdResponses = false
+        val heldResponses = ArrayList<ByteArray>()
+        val wireChannel = Channel<ByteArray>(Channel.UNLIMITED)
+        var inFlightSentSignal = CompletableDeferred<Unit>()
+
+        val gatedTransport = object : SmbPacketTransport {
+            override suspend fun sendPacket(packet: ByteArray) {
+                gateMutex.withLock {
+                    backend.sendPacket(packet)
+                    val produced = ArrayList<ByteArray>()
+                    while (backend.hasPendingResponses()) {
+                        produced.add(backend.receivePacket())
+                    }
+                    if (holdResponses) {
+                        heldResponses.addAll(produced)
+                        inFlightSentSignal.complete(Unit)
+                    } else {
+                        for (resp in produced) {
+                            wireChannel.trySend(resp)
+                        }
+                    }
+                }
+            }
+
+            override suspend fun receivePacket(): ByteArray = wireChannel.receive()
+
+            override fun close() {
+                wireChannel.close()
+                backend.close()
+            }
+        }
+
+        suspend fun releaseHeldResponses() {
+            gateMutex.withLock {
+                holdResponses = false
+                for (resp in heldResponses) {
+                    wireChannel.trySend(resp)
+                }
+                heldResponses.clear()
+            }
+        }
+
+        withContext(Dispatchers.Default) {
+            val client = SmbClient(
+                host = "192.168.1.10",
+                port = 445,
+                config = SmbConfig(encryptionPolicy = SmbEncryptionPolicy.REQUIRED),
+                transport = gatedTransport,
+                readerDispatcher = Dispatchers.IO.limitedParallelism(2),
+            )
+            client.initializeSession(creds)
+            val share = client.connectShare("PublicDocs")
+            share.writeBytes("data/comic.cbz", ByteArray(8192) { (it and 0xFF).toByte() })
+            assertEquals(0, backend.openHandleCount())
+
+            // 1. Cancel an in-flight openFile (SMB2 CREATE): connection must stay healthy and leaked FileId must be auto-closed
+            gateMutex.withLock {
+                holdResponses = true
+                inFlightSentSignal = CompletableDeferred()
+            }
+            val openJob = launch {
+                share.openFile("data/comic.cbz").closeSuspend()
+            }
+            inFlightSentSignal.await()
+            openJob.cancelAndJoin()
+            assertFalse(client.isClosed, "Cancelling a single caller must not close the shared SmbClient")
+
+            releaseHeldResponses()
+            kotlinx.coroutines.withTimeout(1_000L) {
+                while (backend.openHandleCount() != 0) {
+                    kotlinx.coroutines.delay(5L)
+                }
+            }
+            assertTrue(share.exists("data/comic.cbz"))
+            assertEquals(0, backend.openHandleCount(), "Orphaned CREATE handle from cancelled openFile must be closed")
+
+            // 1b. Cancel an in-flight [CREATE, SET_INFO, CLOSE] compound where CREATE succeeds, SET_INFO fails, and trailing CLOSE fails:
+            //     cleanupOrphanedCompoundResponses must still close the leaked FileId
+            backend.failTrailingCloseOnSetInfoError = true
+            gateMutex.withLock {
+                holdResponses = true
+                inFlightSentSignal = CompletableDeferred()
+            }
+            val delNonEmptyJob = async {
+                runCatching { share.deleteDirectory("data") }
+            }
+            inFlightSentSignal.await()
+            delNonEmptyJob.cancelAndJoin()
+            releaseHeldResponses()
+            kotlinx.coroutines.withTimeout(1_000L) {
+                while (backend.openHandleCount() != 0) {
+                    kotlinx.coroutines.delay(5L)
+                }
+            }
+            backend.failTrailingCloseOnSetInfoError = false
+            assertEquals(0, backend.openHandleCount(), "Orphaned CREATE handle from cancelled compound with failed CLOSE must be closed")
+
+            // 2. Cancel an active coroutine whose OWN Job (currentCoroutineContext()[Job]) is set on raf.callerJob
+            //    while blocked inside raf.read() -> runBlocking (verifying immediate Cancelling-state interruption)
+            val raf = share.openRandomAccessFile("data/comic.cbz", "r")
+
+            gateMutex.withLock {
+                holdResponses = true
+                inFlightSentSignal = CompletableDeferred()
+            }
+            var capturedReadError: Throwable? = null
+            val activeThumbnailCoroutine = launch(Dispatchers.IO.limitedParallelism(1)) {
+                raf.callerJob = kotlinx.coroutines.currentCoroutineContext()[Job]
+                try {
+                    val buf = ByteArray(1024)
+                    raf.read(buf, 0, buf.size)
+                } catch (t: Throwable) {
+                    capturedReadError = t
+                    throw t
+                } finally {
+                    raf.callerJob = null
+                }
+            }
+            inFlightSentSignal.await()
+            kotlinx.coroutines.withTimeout(1_000L) {
+                activeThumbnailCoroutine.cancelAndJoin()
+            }
+
+            assertTrue(
+                capturedReadError is CancellationException,
+                "Expected CancellationException from raf.read on active coroutine Cancelling, got $capturedReadError",
+            )
+            assertFalse(client.isClosed, "Cancelling raf.callerJob must not close the shared SmbClient")
+
+            releaseHeldResponses()
+            // Closing the cancelled SmbRandomAccessFile must still send SMB2 CLOSE (cancellable = false)
+            raf.close()
+            assertEquals(0, backend.openHandleCount(), "raf.close() must close the SMB file handle even after callerJob cancellation")
+
+            // Shared SmbClient & SmbShare remain healthy for subsequent visible thumbnails
+            assertEquals(8192L, share.stat("data/comic.cbz").size)
+            share.closeSuspend()
+            client.closeSuspend()
+
+            // 3. Cancelling a head-of-line multi-credit waiter must immediately wake subsequent 1-credit waiters
+            val stingyWakeBackend = MockSmb3ServerTransport(
+                expectedCredentials = creds,
+                encryptShare = false,
+                creditsGrantedPerResponse = 1u,
+                echoCreditsGranted = 2u,
+            )
+            val wakeChannel = Channel<ByteArray>(Channel.UNLIMITED)
+            val wakeLock = Mutex()
+            var holdEchoResp = false
+            val heldEchoResps = ArrayList<ByteArray>()
+            val echoSentSignal = CompletableDeferred<Unit>()
+            val wakeTransport = object : SmbPacketTransport {
+                override suspend fun sendPacket(packet: ByteArray) {
+                    wakeLock.withLock {
+                        val cmd = SmbHeader.decode(packet).command
+                        stingyWakeBackend.sendPacket(packet)
+                        val produced = ArrayList<ByteArray>()
+                        while (stingyWakeBackend.hasPendingResponses()) {
+                            produced.add(stingyWakeBackend.receivePacket())
+                        }
+                        if (holdEchoResp && cmd == SmbCommand.ECHO) {
+                            heldEchoResps.addAll(produced)
+                            echoSentSignal.complete(Unit)
+                        } else {
+                            for (r in produced) wakeChannel.trySend(r)
+                        }
+                    }
+                }
+                override suspend fun receivePacket(): ByteArray = wakeChannel.receive()
+                override fun close() {
+                    wakeChannel.close()
+                    stingyWakeBackend.close()
+                }
+            }
+            val wClient = SmbClient(
+                host = "192.168.1.10",
+                port = 445,
+                config = SmbConfig(encryptionPolicy = SmbEncryptionPolicy.DISABLED),
+                transport = wakeTransport,
+                readerDispatcher = Dispatchers.IO.limitedParallelism(2),
+            )
+            wClient.initializeSession(creds)
+            val wShare = wClient.connectShare("PublicDocs")
+            val wFile = wShare.openFile(
+                path = "notes/wake.txt",
+                desiredAccess = SmbAccessMask.WRITE_DEFAULT,
+                createDisposition = SmbCreateDisposition.FILE_OVERWRITE_IF,
+            )
+            stingyWakeBackend.creditsGrantedPerResponse = 2u
+            wFile.write(0L, "wake".encodeToByteArray())
+            stingyWakeBackend.creditsGrantedPerResponse = 1u
+            // availableCredits is now exactly 2.
+            // headWaiter needs 3 credits -> triggers ECHO (which consumes 1 credit, leaving availableCredits == 1 while ECHO response is held).
+            // tailWaiter needs 1 credit -> queues behind headWaiter.
+            // Cancelling headWaiter must immediately wake tailWaiter using the remaining 1 credit even while ECHO is still held!
+            wakeLock.withLock { holdEchoResp = true }
+            val headWaiter = async { runCatching { wShare.deleteFile("notes/missing_3cred.txt") } }
+            echoSentSignal.await()
+            val tailWaiter = async { wFile.read(0L, 4).decodeToString() }
+            kotlinx.coroutines.delay(15L) // Ensure tailWaiter is queued behind headWaiter
+            headWaiter.cancelAndJoin()
+            assertEquals("wake", kotlinx.coroutines.withTimeout(1_000L) { tailWaiter.await() })
+            wakeLock.withLock {
+                holdEchoResp = false
+                for (r in heldEchoResps) wakeChannel.trySend(r)
+                heldEchoResps.clear()
+            }
+            wFile.closeSuspend()
+            wShare.closeSuspend()
+            wClient.closeSuspend()
+
+            // 4. Cancelling initializeSession mid-handshake aborts immediately instead of hanging for requestTimeout (30s)
+            val stalledHandshakeSent = CompletableDeferred<Unit>()
+            val stalledHandshakeTransport = object : SmbPacketTransport {
+                override suspend fun sendPacket(packet: ByteArray) {
+                    stalledHandshakeSent.complete(Unit)
+                }
+                override suspend fun receivePacket(): ByteArray {
+                    kotlinx.coroutines.awaitCancellation()
+                }
+                override fun close() {}
+            }
+            val hClient = SmbClient(
+                host = "192.168.1.10",
+                port = 445,
+                config = SmbConfig(requestTimeout = 30.seconds),
+                transport = stalledHandshakeTransport,
+            )
+            var handshakeErr: Throwable? = null
+            val hJob = launch {
+                try {
+                    hClient.initializeSession(creds)
+                } catch (t: Throwable) {
+                    handshakeErr = t
+                    throw t
+                }
+            }
+            stalledHandshakeSent.await()
+            kotlinx.coroutines.withTimeout(1_000L) {
+                hJob.cancelAndJoin()
+            }
+            assertTrue(handshakeErr is CancellationException, "Expected CancellationException on cancelled handshake, got $handshakeErr")
+            assertTrue(hClient.isClosed, "Cancelled handshake must close the half-initialized SmbClient")
+        }
+    }
+
+    @Test
     fun testLargeChunkedIoAndMultiBatchDirectoryAndProtocolModels() = runTest {
         val creds = SmbCredentials("alice", "SecretPassword123!", "WORKGROUP")
         val mockTransport = MockSmb3ServerTransport(
@@ -1186,6 +1635,7 @@ class SmbClientEndToEndTest {
     /**
      * In-memory mock SMB2/SMB3 server transport for end-to-end testing.
      */
+    @OptIn(ExperimentalCoroutinesApi::class)
     private class MockSmb3ServerTransport(
         private val expectedCredentials: SmbCredentials,
         private val dialect: SmbDialect = SmbDialect.SMB_3_1_1,
@@ -1199,9 +1649,12 @@ class SmbClientEndToEndTest {
         private val injectPendingAndNotifications: Boolean = false,
         private val multiFragmentRpcResponse: Boolean = false,
         private val multiBatchDirectoryQuery: Boolean = false,
+        var creditsGrantedPerResponse: UShort = 31u,
+        private val echoCreditsGranted: UShort = creditsGrantedPerResponse,
     ) : SmbPacketTransport {
 
-        private val responseQueue = ArrayDeque<ByteArray>()
+        private val serverMutex = Mutex()
+        private val responseChannel = Channel<ByteArray>(Channel.UNLIMITED)
         private var preauthHash = ByteArray(64)
         private val serverChallenge = ByteArray(8) { (0x11 * (it + 1)).toByte() }
         private var serverSigningKey: ByteArray? = null
@@ -1220,13 +1673,18 @@ class SmbClientEndToEndTest {
         var splitRpcTransceiveResponse: Boolean = false
         var stripServerSignatureOnNextResponse: Boolean = false
         var corruptServerSignatureOnNextResponse: Boolean = false
+        var failTrailingCloseOnSetInfoError: Boolean = false
         var encryptedPacketsCount: Int = 0
+            private set
+        var readRequestsCount: Int = 0
             private set
         val signedRequestCommands = mutableListOf<SmbCommand>()
 
-        fun hasPendingResponses(): Boolean = responseQueue.isNotEmpty()
+        fun hasPendingResponses(): Boolean = !responseChannel.isEmpty
 
-        override suspend fun sendPacket(packet: ByteArray) {
+        suspend fun openHandleCount(): Int = serverMutex.withLock { openHandles.size }
+
+        override suspend fun sendPacket(packet: ByteArray) = serverMutex.withLock {
             val wasEncrypted = SmbTransformHeader.isTransformPacket(packet)
             val plainPacket = if (wasEncrypted) {
                 encryptedPacketsCount++
@@ -1278,6 +1736,7 @@ class SmbClientEndToEndTest {
                     SmbCommand.NEGOTIATE -> {
                         preauthHash = updateHash(preauthHash, plainReq)
                         val resp = buildNegotiateResponse(reqHeader.messageId)
+                        resp.writeUShortLE(14, creditsGrantedPerResponse)
                         preauthHash = updateHash(preauthHash, resp)
                         resp
                     }
@@ -1292,6 +1751,7 @@ class SmbClientEndToEndTest {
                                 buildSessionSetupSuccess(reqHeader.messageId)
                             } else {
                                 val resp = buildSessionSetupChallenge(reqHeader.messageId)
+                                resp.writeUShortLE(14, creditsGrantedPerResponse)
                                 preauthHash = updateHash(preauthHash, resp)
                                 resp
                             }
@@ -1303,7 +1763,7 @@ class SmbClientEndToEndTest {
                         }
                     }
                     SmbCommand.TREE_CONNECT -> buildTreeConnectResponse(reqHeader)
-                    SmbCommand.TREE_DISCONNECT, SmbCommand.LOGOFF -> buildSimpleResponse(reqHeader, 4)
+                    SmbCommand.TREE_DISCONNECT, SmbCommand.LOGOFF, SmbCommand.ECHO -> buildSimpleResponse(reqHeader, 4)
                     SmbCommand.CREATE -> {
                         val resp = handleCreate(reqHeader, plainReq)
                         val respHdr = SmbHeader.decode(resp)
@@ -1326,7 +1786,14 @@ class SmbClientEndToEndTest {
                     SmbCommand.READ -> handleRead(reqHeader, plainReq)
                     SmbCommand.QUERY_DIRECTORY -> handleQueryDirectory(reqHeader, plainReq)
                     SmbCommand.LOCK -> buildSimpleResponse(reqHeader, 4)
-                    SmbCommand.SET_INFO -> handleSetInfo(reqHeader, plainReq)
+                    SmbCommand.SET_INFO -> {
+                        val resp = handleSetInfo(reqHeader, plainReq)
+                        val respHdr = SmbHeader.decode(resp)
+                        if (failTrailingCloseOnSetInfoError && respHdr.status != NtStatus.STATUS_SUCCESS) {
+                            compoundFailedStatus = respHdr.status
+                        }
+                        resp
+                    }
                     SmbCommand.IOCTL -> handleIoctl(reqHeader, plainReq)
                     else -> buildSimpleResponse(reqHeader, 4, NtStatus.STATUS_NOT_SUPPORTED)
                 }
@@ -1339,36 +1806,46 @@ class SmbClientEndToEndTest {
                 val unsolicited = ByteArray(SmbHeader.SIZE + 24)
                 SmbHeader(
                     command = SmbCommand.OPLOCK_BREAK,
+                    creditRequestResponse = 0u,
                     flags = SmbHeader.SMB2_FLAGS_SERVER_TO_REDIR,
                     messageId = ULong.MAX_VALUE,
                 ).encodeInto(unsolicited, 0)
-                responseQueue.addLast(unsolicited)
+                responseChannel.trySend(unsolicited)
 
                 // 2. Interim STATUS_PENDING async response
                 val pending = ByteArray(SmbHeader.SIZE + 8)
                 SmbHeader(
                     status = NtStatus.STATUS_PENDING,
                     command = SmbHeader.decode(reqParts.first()).command,
+                    creditRequestResponse = 0u,
                     flags = SmbHeader.SMB2_FLAGS_SERVER_TO_REDIR or SmbHeader.SMB2_FLAGS_ASYNC_COMMAND,
                     messageId = firstMsgId,
                     asyncIdOrTreeId = 0xCAFE_BABEuL,
                     sessionId = sessionId,
                 ).encodeInto(pending, 0)
-                responseQueue.addLast(pending)
+                responseChannel.trySend(pending)
 
                 // 3. Stale response with older MessageId (0)
                 if (firstMsgId > 1uL) {
                     val stale = ByteArray(SmbHeader.SIZE + 4)
                     SmbHeader(
                         command = SmbCommand.ECHO,
+                        creditRequestResponse = 0u,
                         flags = SmbHeader.SMB2_FLAGS_SERVER_TO_REDIR,
                         messageId = 0uL,
                         sessionId = sessionId,
                     ).encodeInto(stale, 0)
-                    responseQueue.addLast(stale)
+                    responseChannel.trySend(stale)
                 }
             }
 
+            for (respPart in respParts) {
+                val cmd = SmbHeader.decode(respPart).command
+                respPart.writeUShortLE(
+                    14,
+                    if (cmd == SmbCommand.ECHO) echoCreditsGranted else creditsGrantedPerResponse,
+                )
+            }
             val signEach: ((ByteArray) -> Unit)? = if (!wasEncrypted && serverSigningKey != null) {
                 { slice ->
                     val hdr = SmbHeader.decode(slice)
@@ -1401,7 +1878,8 @@ class SmbClientEndToEndTest {
             } else {
                 plainResp
             }
-            responseQueue.addLast(wireResp)
+            responseChannel.trySend(wireResp)
+            Unit
         }
 
         private fun replaceRelatedFileId(command: SmbCommand, packet: ByteArray, handleId: ULong) {
@@ -1417,10 +1895,10 @@ class SmbClientEndToEndTest {
             }
         }
 
-        override suspend fun receivePacket(): ByteArray = responseQueue.removeFirst()
+        override suspend fun receivePacket(): ByteArray = responseChannel.receive()
 
         override fun close() {
-            responseQueue.clear()
+            responseChannel.close()
         }
 
         private fun updateHash(h: ByteArray, p: ByteArray): ByteArray {
@@ -1710,6 +2188,7 @@ class SmbClientEndToEndTest {
         }
 
         private fun handleRead(reqHeader: SmbHeader, plainReq: ByteArray): ByteArray {
+            readRequestsCount++
             val b = SmbHeader.SIZE
             val reqLen = plainReq.readUIntLE(b + 4).toInt()
             val fileOff = plainReq.readULongLE(b + 8).toInt()

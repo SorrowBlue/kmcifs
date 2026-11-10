@@ -2,6 +2,8 @@ package com.sorrowblue.kmcifs.client
 
 import com.sorrowblue.kmcifs.client.protocol.SmbCipherId
 import com.sorrowblue.kmcifs.client.protocol.SmbDialect
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Policy for applying SMB3 packet encryption (`SMB2_TRANSFORM_HEADER`).
@@ -38,8 +40,8 @@ enum class SmbEncryptionPolicy {
  * @property verifyServerSignatures Whether to verify cryptographic signatures on signed responses from the server.
  * @property queryDirectoryBufferSize Default maximum output buffer size in bytes for each `SMB2 QUERY_DIRECTORY` request.
  * @property randomAccessBufferSize Default read buffer size in bytes for [SmbRandomAccessFile].
- * @property connectTimeoutMillis TCP socket connection timeout in milliseconds.
- * @property requestTimeoutMillis Timeout in milliseconds for each SMB request/response exchange.
+ * @property connectTimeout TCP socket connection timeout.
+ * @property requestTimeout Timeout for each SMB request/response exchange.
  */
 data class SmbConfig(
     val dialects: List<SmbDialect> = listOf(
@@ -59,6 +61,11 @@ data class SmbConfig(
     val verifyServerSignatures: Boolean = true,
     val queryDirectoryBufferSize: Int = 64 * 1024,
     val randomAccessBufferSize: Int = SmbRandomAccessFile.DEFAULT_BUFFER_SIZE,
-    val connectTimeoutMillis: Long = 10_000L,
-    val requestTimeoutMillis: Long = 30_000L,
-)
+    val connectTimeout: Duration = 10.seconds,
+    val requestTimeout: Duration = 30.seconds,
+) {
+    init {
+        require(connectTimeout.isPositive()) { "connectTimeout must be positive: $connectTimeout" }
+        require(requestTimeout.isPositive()) { "requestTimeout must be positive: $requestTimeout" }
+    }
+}

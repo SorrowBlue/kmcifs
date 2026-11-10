@@ -98,7 +98,7 @@ internal object SmbMessages {
     fun buildNegotiateRequest(
         messageId: ULong,
         dialects: List<SmbDialect>,
-        clientGuid: ByteArray = Random.Default.nextBytes(16),
+        clientGuid: ByteArray = Random.nextBytes(16),
         ciphers: List<SmbCipherId> = listOf(SmbCipherId.AES_128_GCM, SmbCipherId.AES_128_CCM),
     ): ByteArray {
         require(dialects.isNotEmpty()) { "At least one SMB dialect must be specified" }
@@ -117,7 +117,7 @@ internal object SmbMessages {
             contextOffsetInPacket = unalignedOffset + padTo8
 
             // Context 1: SMB2_PREAUTH_INTEGRITY_CAPABILITIES (HashAlgorithmCount=1 (SHA-512=0x0001), SaltLength=32)
-            val salt = Random.Default.nextBytes(32)
+            val salt = Random.nextBytes(32)
             val preauthData = ByteArray(6 + 32)
             preauthData.writeUShortLE(0, 1u) // HashAlgorithmCount = 1
             preauthData.writeUShortLE(2, 32u) // SaltLength = 32
@@ -201,7 +201,12 @@ internal object SmbMessages {
         return out
     }
 
-    private fun requireBodySize(packet: ByteArray, header: SmbHeader, expectedCommand: SmbCommand, minBodyBytes: Int) {
+    private fun requireBodySize(
+        packet: ByteArray,
+        header: SmbHeader,
+        expectedCommand: SmbCommand,
+        minBodyBytes: Int
+    ) {
         if (header.command != expectedCommand) {
             throw SmbException(
                 header.status,
@@ -220,7 +225,10 @@ internal object SmbMessages {
     fun parseNegotiateResponse(packet: ByteArray): NegotiateResponse {
         val header = SmbHeader.decode(packet)
         if (header.status != NtStatus.STATUS_SUCCESS) {
-            throw SmbException(header.status, "NEGOTIATE failed with ${NtStatus.nameOf(header.status)}")
+            throw SmbException(
+                header.status,
+                "NEGOTIATE failed with ${NtStatus.nameOf(header.status)}"
+            )
         }
         requireBodySize(packet, header, SmbCommand.NEGOTIATE, 64)
         val bodyOffset = SmbHeader.SIZE
@@ -240,11 +248,12 @@ internal object SmbMessages {
         val secBufLen = packet.readUShortLE(bodyOffset + 58).toInt()
         val negotiateContextOffset = packet.readUIntLE(bodyOffset + 60).toInt()
 
-        val secBuffer = if (secBufLen > 0 && secBufOffset >= SmbHeader.SIZE && secBufLen <= packet.size - secBufOffset) {
-            packet.copyOfRange(secBufOffset, secBufOffset + secBufLen)
-        } else {
-            ByteArray(0)
-        }
+        val secBuffer =
+            if (secBufLen > 0 && secBufOffset >= SmbHeader.SIZE && secBufLen <= packet.size - secBufOffset) {
+                packet.copyOfRange(secBufOffset, secBufOffset + secBufLen)
+            } else {
+                ByteArray(0)
+            }
 
         var selectedCipher: SmbCipherId? = null
         if (dialect == SmbDialect.SMB_3_1_1) {
@@ -266,6 +275,7 @@ internal object SmbMessages {
                                 }
                             }
                         }
+
                         SMB2_ENCRYPTION_CAPABILITIES -> {
                             if (ctxLen >= 4) {
                                 val cipherCount = packet.readUShortLE(dataStart).toInt()
@@ -277,7 +287,11 @@ internal object SmbMessages {
                                         SmbCipherId.fromCode(cipherCode)
                                             ?: throw SmbException(
                                                 NtStatus.STATUS_INVALID_NETWORK_RESPONSE,
-                                                "Server selected unsupported cipher: 0x${cipherCode.toString(16)}",
+                                                "Server selected unsupported cipher: 0x${
+                                                    cipherCode.toString(
+                                                        16
+                                                    )
+                                                }",
                                             )
                                     }
                                 }
@@ -338,7 +352,10 @@ internal object SmbMessages {
         packet[bodyOffset + 3] = securityMode.toByte()
         packet.writeUIntLE(bodyOffset + 4, 0u) // Capabilities
         packet.writeUIntLE(bodyOffset + 8, 0u) // Channel = 0
-        packet.writeUShortLE(bodyOffset + 12, (SmbHeader.SIZE + bodyFixedSize).toUShort()) // SecurityBufferOffset = 88
+        packet.writeUShortLE(
+            bodyOffset + 12,
+            (SmbHeader.SIZE + bodyFixedSize).toUShort()
+        ) // SecurityBufferOffset = 88
         packet.writeUShortLE(bodyOffset + 14, securityBuffer.size.toUShort())
         packet.writeULongLE(bodyOffset + 16, 0uL) // PreviousSessionId = 0
 
@@ -349,7 +366,10 @@ internal object SmbMessages {
     fun parseSessionSetupResponse(packet: ByteArray): SessionSetupResponse {
         val header = SmbHeader.decode(packet)
         if (header.status != NtStatus.STATUS_SUCCESS && header.status != NtStatus.STATUS_MORE_PROCESSING_REQUIRED) {
-            throw SmbException(header.status, "SESSION_SETUP failed with ${NtStatus.nameOf(header.status)}")
+            throw SmbException(
+                header.status,
+                "SESSION_SETUP failed with ${NtStatus.nameOf(header.status)}"
+            )
         }
         requireBodySize(packet, header, SmbCommand.SESSION_SETUP, 8)
         val bodyOffset = SmbHeader.SIZE
@@ -357,11 +377,12 @@ internal object SmbMessages {
         val secBufOffset = packet.readUShortLE(bodyOffset + 4).toInt()
         val secBufLen = packet.readUShortLE(bodyOffset + 6).toInt()
 
-        val secBuffer = if (secBufLen > 0 && secBufOffset >= SmbHeader.SIZE && secBufLen <= packet.size - secBufOffset) {
-            packet.copyOfRange(secBufOffset, secBufOffset + secBufLen)
-        } else {
-            ByteArray(0)
-        }
+        val secBuffer =
+            if (secBufLen > 0 && secBufOffset >= SmbHeader.SIZE && secBufLen <= packet.size - secBufOffset) {
+                packet.copyOfRange(secBufOffset, secBufOffset + secBufLen)
+            } else {
+                ByteArray(0)
+            }
 
         return SessionSetupResponse(
             status = header.status,
@@ -381,6 +402,19 @@ internal object SmbMessages {
         header.encodeInto(packet, 0)
         packet.writeUShortLE(SmbHeader.SIZE, 4u)
         packet.writeUShortLE(SmbHeader.SIZE + 2, 0u)
+        return packet
+    }
+
+    fun buildEchoRequest(messageId: ULong = 0uL, sessionId: ULong = 0uL): ByteArray {
+        val packet = ByteArray(SmbHeader.SIZE + 4)
+        val header = SmbHeader.withTreeId(
+            command = SmbCommand.ECHO,
+            messageId = messageId,
+            sessionId = sessionId,
+        )
+        header.encodeInto(packet, 0)
+        packet.writeUShortLE(SmbHeader.SIZE, 4u) // StructureSize = 4 (MS-SMB2 2.2.28)
+        packet.writeUShortLE(SmbHeader.SIZE + 2, 0u) // Reserved = 0
         return packet
     }
 
@@ -408,7 +442,10 @@ internal object SmbMessages {
         val bodyOffset = SmbHeader.SIZE
         packet.writeUShortLE(bodyOffset, 9u) // StructureSize = 9
         packet.writeUShortLE(bodyOffset + 2, 0u) // Flags = 0
-        packet.writeUShortLE(bodyOffset + 4, (SmbHeader.SIZE + bodyFixedSize).toUShort()) // PathOffset = 72
+        packet.writeUShortLE(
+            bodyOffset + 4,
+            (SmbHeader.SIZE + bodyFixedSize).toUShort()
+        ) // PathOffset = 72
         packet.writeUShortLE(bodyOffset + 6, pathBytes.size.toUShort()) // PathLength
         payload.copyInto(packet, SmbHeader.SIZE + bodyFixedSize)
         return packet
@@ -417,7 +454,10 @@ internal object SmbMessages {
     fun parseTreeConnectResponse(packet: ByteArray): TreeConnectResponse {
         val header = SmbHeader.decode(packet)
         if (header.status != NtStatus.STATUS_SUCCESS) {
-            throw SmbException(header.status, "TREE_CONNECT failed with ${NtStatus.nameOf(header.status)}")
+            throw SmbException(
+                header.status,
+                "TREE_CONNECT failed with ${NtStatus.nameOf(header.status)}"
+            )
         }
         requireBodySize(packet, header, SmbCommand.TREE_CONNECT, 16)
         val bodyOffset = SmbHeader.SIZE
@@ -435,7 +475,11 @@ internal object SmbMessages {
         )
     }
 
-    fun buildTreeDisconnectRequest(messageId: ULong = 0uL, sessionId: ULong, treeId: UInt): ByteArray {
+    fun buildTreeDisconnectRequest(
+        messageId: ULong = 0uL,
+        sessionId: ULong,
+        treeId: UInt
+    ): ByteArray {
         val packet = ByteArray(SmbHeader.SIZE + 4)
         val header = SmbHeader.withTreeId(
             command = SmbCommand.TREE_DISCONNECT,
@@ -491,7 +535,10 @@ internal object SmbMessages {
         packet.writeUIntLE(bodyOffset + 32, shareAccess)
         packet.writeUIntLE(bodyOffset + 36, createDisposition.code)
         packet.writeUIntLE(bodyOffset + 40, createOptions)
-        packet.writeUShortLE(bodyOffset + 44, (SmbHeader.SIZE + bodyFixedSize).toUShort()) // NameOffset = 120
+        packet.writeUShortLE(
+            bodyOffset + 44,
+            (SmbHeader.SIZE + bodyFixedSize).toUShort()
+        ) // NameOffset = 120
         packet.writeUShortLE(bodyOffset + 46, nameBytes.size.toUShort()) // NameLength
         packet.writeUIntLE(bodyOffset + 48, 0u) // CreateContextsOffset = 0
         packet.writeUIntLE(bodyOffset + 52, 0u) // CreateContextsLength = 0
@@ -503,7 +550,10 @@ internal object SmbMessages {
     fun parseCreateResponse(packet: ByteArray): CreateResponse {
         val header = SmbHeader.decode(packet)
         if (header.status != NtStatus.STATUS_SUCCESS) {
-            throw SmbException(header.status, "CREATE failed with ${NtStatus.nameOf(header.status)}")
+            throw SmbException(
+                header.status,
+                "CREATE failed with ${NtStatus.nameOf(header.status)}"
+            )
         }
         requireBodySize(packet, header, SmbCommand.CREATE, 80)
         val bodyOffset = SmbHeader.SIZE
@@ -615,7 +665,10 @@ internal object SmbMessages {
         packet.writeUIntLE(bodyOffset + 4, 0u) // FileIndex = 0
         packet.writeULongLE(bodyOffset + 8, fileId.persistent)
         packet.writeULongLE(bodyOffset + 16, fileId.volatile)
-        packet.writeUShortLE(bodyOffset + 24, (SmbHeader.SIZE + bodyFixedSize).toUShort()) // FileNameOffset = 96
+        packet.writeUShortLE(
+            bodyOffset + 24,
+            (SmbHeader.SIZE + bodyFixedSize).toUShort()
+        ) // FileNameOffset = 96
         packet.writeUShortLE(bodyOffset + 26, patternBytes.size.toUShort())
         packet.writeUIntLE(bodyOffset + 28, outputBufferLength.toUInt())
 
@@ -627,13 +680,19 @@ internal object SmbMessages {
      * Parses directory entries from an `SMB2 QUERY_DIRECTORY` response.
      * Returns `null` when the server responds with `STATUS_NO_MORE_FILES` or `STATUS_NO_SUCH_FILE`.
      */
-    fun parseQueryDirectoryResponse(packet: ByteArray, excludeDotEntries: Boolean = true): List<SmbDirectoryEntry>? {
+    fun parseQueryDirectoryResponse(
+        packet: ByteArray,
+        excludeDotEntries: Boolean = true
+    ): List<SmbDirectoryEntry>? {
         val header = SmbHeader.decode(packet)
         if (header.status == NtStatus.STATUS_NO_MORE_FILES || header.status == NtStatus.STATUS_NO_SUCH_FILE) {
             return null
         }
         if (header.status != NtStatus.STATUS_SUCCESS) {
-            throw SmbException(header.status, "QUERY_DIRECTORY failed with ${NtStatus.nameOf(header.status)}")
+            throw SmbException(
+                header.status,
+                "QUERY_DIRECTORY failed with ${NtStatus.nameOf(header.status)}"
+            )
         }
         requireBodySize(packet, header, SmbCommand.QUERY_DIRECTORY, 8)
 
@@ -809,7 +868,10 @@ internal object SmbMessages {
 
         val bodyOffset = SmbHeader.SIZE
         packet.writeUShortLE(bodyOffset, 49u) // StructureSize = 49
-        packet.writeUShortLE(bodyOffset + 2, (SmbHeader.SIZE + bodyFixedSize).toUShort()) // DataOffset = 112
+        packet.writeUShortLE(
+            bodyOffset + 2,
+            (SmbHeader.SIZE + bodyFixedSize).toUShort()
+        ) // DataOffset = 112
         packet.writeUIntLE(bodyOffset + 4, length.toUInt())
         packet.writeULongLE(bodyOffset + 8, offset.toULong())
         packet.writeULongLE(bodyOffset + 16, fileId.persistent)
@@ -875,7 +937,10 @@ internal object SmbMessages {
     fun parseSimpleSuccessResponse(packet: ByteArray, commandName: String) {
         val header = SmbHeader.decode(packet)
         if (header.status != NtStatus.STATUS_SUCCESS) {
-            throw SmbException(header.status, "$commandName failed with ${NtStatus.nameOf(header.status)}")
+            throw SmbException(
+                header.status,
+                "$commandName failed with ${NtStatus.nameOf(header.status)}"
+            )
         }
     }
 
@@ -906,7 +971,10 @@ internal object SmbMessages {
         packet[bodyOffset + 2] = 0x01 // InfoType = SMB2_0_INFO_FILE (1)
         packet[bodyOffset + 3] = fileInfoClass.toByte()
         packet.writeUIntLE(bodyOffset + 4, infoBuffer.size.toUInt())
-        packet.writeUShortLE(bodyOffset + 8, (SmbHeader.SIZE + bodyFixedSize).toUShort()) // BufferOffset = 96
+        packet.writeUShortLE(
+            bodyOffset + 8,
+            (SmbHeader.SIZE + bodyFixedSize).toUShort()
+        ) // BufferOffset = 96
         packet.writeUShortLE(bodyOffset + 10, 0u) // Reserved
         packet.writeUIntLE(bodyOffset + 12, 0u) // AdditionalInformation = 0
         packet.writeULongLE(bodyOffset + 16, fileId.persistent)
@@ -959,7 +1027,8 @@ internal object SmbMessages {
         maxOutputResponse: Int = 65536,
     ): ByteArray {
         val bodyFixedSize = 56
-        val credits = maxOf(1, (maxOf(inputData.size, maxOutputResponse) + 65535) / 65536).toUShort()
+        val credits =
+            maxOf(1, (maxOf(inputData.size, maxOutputResponse) + 65535) / 65536).toUShort()
         val packet = ByteArray(SmbHeader.SIZE + bodyFixedSize + maxOf(1, inputData.size))
         val header = SmbHeader.withTreeId(
             command = SmbCommand.IOCTL,
@@ -977,7 +1046,10 @@ internal object SmbMessages {
         packet.writeUIntLE(bodyOffset + 4, ctlCode)
         packet.writeULongLE(bodyOffset + 8, fileId.persistent)
         packet.writeULongLE(bodyOffset + 16, fileId.volatile)
-        packet.writeUIntLE(bodyOffset + 24, (SmbHeader.SIZE + bodyFixedSize).toUInt()) // InputOffset = 120
+        packet.writeUIntLE(
+            bodyOffset + 24,
+            (SmbHeader.SIZE + bodyFixedSize).toUInt()
+        ) // InputOffset = 120
         packet.writeUIntLE(bodyOffset + 28, inputData.size.toUInt()) // InputCount
         packet.writeUIntLE(bodyOffset + 32, 0u) // MaxInputResponse = 0
         packet.writeUIntLE(bodyOffset + 36, 0u) // OutputOffset = 0
@@ -1036,8 +1108,14 @@ internal object SmbMessages {
                 val flags = slice.readUIntLE(16)
                 slice.writeUIntLE(16, flags or SmbHeader.SMB2_FLAGS_RELATED_OPERATIONS)
                 if ((flags and SmbHeader.SMB2_FLAGS_SERVER_TO_REDIR) == 0u) {
-                    slice.writeUIntLE(36, 0xFFFFFFFFu) // Related operation TreeId (MS-SMB2 3.2.4.1.4)
-                    slice.writeULongLE(40, 0xFFFFFFFFFFFFFFFFuL) // Related operation SessionId (MS-SMB2 3.2.4.1.4)
+                    slice.writeUIntLE(
+                        36,
+                        0xFFFFFFFFu
+                    ) // Related operation TreeId (MS-SMB2 3.2.4.1.4)
+                    slice.writeULongLE(
+                        40,
+                        0xFFFFFFFFFFFFFFFFuL
+                    ) // Related operation SessionId (MS-SMB2 3.2.4.1.4)
                 }
             }
             if (!isLast) {
@@ -1074,7 +1152,8 @@ internal object SmbMessages {
         var offset = 0
         while (offset <= packet.size - SmbHeader.SIZE) {
             val nextCmd = packet.readUIntLE(offset + 20).toInt()
-            val hasValidNext = nextCmd >= SmbHeader.SIZE && nextCmd <= packet.size - offset - SmbHeader.SIZE
+            val hasValidNext =
+                nextCmd >= SmbHeader.SIZE && nextCmd <= packet.size - offset - SmbHeader.SIZE
             val end = if (hasValidNext) {
                 offset + nextCmd
             } else {

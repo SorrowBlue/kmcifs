@@ -36,7 +36,7 @@ internal object SmbTransformHeader {
         nonceBytes: ByteArray? = null,
     ): ByteArray {
         val nonceSize = if (cipherId == SmbCipherId.AES_128_GCM) 12 else 11
-        val rawNonce = nonceBytes ?: Random.Default.nextBytes(nonceSize)
+        val rawNonce = nonceBytes ?: Random.nextBytes(nonceSize)
         require(rawNonce.size == nonceSize) { "Nonce size must be $nonceSize bytes for $cipherId" }
 
         // Transform Header (52 bytes):
@@ -98,15 +98,25 @@ internal object SmbTransformHeader {
         require(originalSize >= SmbHeader.SIZE && originalSize <= transformPacket.size - SIZE) {
             "Transform packet invalid or truncated: originalSize=$originalSize, packetSize=${transformPacket.size}"
         }
-        val ciphertext = if (transformPacket.size == SIZE + originalSize) {
-            transformPacket.copyOfRange(SIZE, transformPacket.size)
-        } else {
-            transformPacket.copyOfRange(SIZE, SIZE + originalSize)
-        }
-
         val plainPacket = when (cipherId) {
-            SmbCipherId.AES_128_CCM -> Aes.ccmDecrypt(decryptionKey, rawNonce, aad, ciphertext, signature)
-            SmbCipherId.AES_128_GCM -> Aes.gcmDecrypt(decryptionKey, rawNonce, aad, ciphertext, signature)
+            SmbCipherId.AES_128_CCM -> Aes.ccmDecrypt(
+                key = decryptionKey,
+                nonce = rawNonce,
+                aad = aad,
+                ciphertext = transformPacket,
+                expectedTag = signature,
+                ciphertextOffset = SIZE,
+                ciphertextLength = originalSize,
+            )
+            SmbCipherId.AES_128_GCM -> Aes.gcmDecrypt(
+                key = decryptionKey,
+                iv = rawNonce,
+                aad = aad,
+                ciphertext = transformPacket,
+                expectedTag = signature,
+                ciphertextOffset = SIZE,
+                ciphertextLength = originalSize,
+            )
         }
 
         // MS-SMB2 3.2.5.1.1.1: Verify inner SMB2 header SessionId for each message in a (possibly compounded) packet

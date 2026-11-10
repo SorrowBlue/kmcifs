@@ -21,6 +21,8 @@ test-dependencies:
   - $libs.kotlinx.coroutines.test
 
 settings:
+  jvm:
+    release: 11
   kotlin:
     optIns:
       - kotlin.ExperimentalUnsignedTypes

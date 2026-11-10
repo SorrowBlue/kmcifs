@@ -16,6 +16,8 @@ dependencies:
   - $libs.ktor.network: exported
 
 settings:
+  jvm:
+    release: 11
   android:
     namespace: com.sorrowblue.kmcifs.sample
     minSdk: 26

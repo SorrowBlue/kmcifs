@@ -26,36 +26,60 @@ internal object Aes {
     )
 
     private val RCON = intArrayOf(
-        0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36
+        0x00000000,
+        0x01000000,
+        0x02000000,
+        0x04000000,
+        0x08000000,
+        0x10000000,
+        0x20000000,
+        0x40000000,
+        0x80000000.toInt(),
+        0x1b000000,
+        0x36000000,
     )
 
+    // Precomputed 32-bit AES forward T-tables (TE0..TE3) for 4-word register-based round evaluation
+    private val TE0 = IntArray(256)
+    private val TE1 = IntArray(256)
+    private val TE2 = IntArray(256)
+    private val TE3 = IntArray(256)
+
+    init {
+        for (i in 0 until 256) {
+            val s = SBOX[i]
+            val s2 = ((s shl 1) xor (if ((s and 0x80) != 0) 0x1b else 0)) and 0xFF
+            val s3 = s2 xor s
+            TE0[i] = (s2 shl 24) or (s shl 16) or (s shl 8) or s3
+            TE1[i] = (s3 shl 24) or (s2 shl 16) or (s shl 8) or s
+            TE2[i] = (s shl 24) or (s3 shl 16) or (s2 shl 8) or s
+            TE3[i] = (s shl 24) or (s shl 16) or (s3 shl 8) or s2
+        }
+    }
+
     class Cipher(key: ByteArray) {
-        private val roundKeys = IntArray(176)
+        internal val rk = IntArray(44)
 
         init {
             require(key.size == 16) { "AES-128 key must be 16 bytes" }
-            for (i in 0 until 16) {
-                roundKeys[i] = key[i].toInt() and 0xFF
-            }
-            val temp = IntArray(4)
-            var bytesGenerated = 16
-            var rconIteration = 1
-            while (bytesGenerated < 176) {
-                for (i in 0 until 4) {
-                    temp[i] = roundKeys[bytesGenerated - 4 + i]
+            rk[0] = readIntBE(key, 0)
+            rk[1] = readIntBE(key, 4)
+            rk[2] = readIntBE(key, 8)
+            rk[3] = readIntBE(key, 12)
+            var rconIdx = 1
+            var i = 4
+            while (i < 44) {
+                var temp = rk[i - 1]
+                if ((i and 3) == 0) {
+                    temp = (
+                        (SBOX[(temp ushr 16) and 0xFF] shl 24) or
+                            (SBOX[(temp ushr 8) and 0xFF] shl 16) or
+                            (SBOX[temp and 0xFF] shl 8) or
+                            SBOX[temp ushr 24]
+                        ) xor RCON[rconIdx++]
                 }
-                if (bytesGenerated % 16 == 0) {
-                    val k = temp[0]
-                    temp[0] = SBOX[temp[1]] xor RCON[rconIteration]
-                    temp[1] = SBOX[temp[2]]
-                    temp[2] = SBOX[temp[3]]
-                    temp[3] = SBOX[k]
-                    rconIteration++
-                }
-                for (i in 0 until 4) {
-                    roundKeys[bytesGenerated] = roundKeys[bytesGenerated - 16] xor temp[i]
-                    bytesGenerated++
-                }
+                rk[i] = rk[i - 4] xor temp
+                i++
             }
         }
 
@@ -64,63 +88,42 @@ internal object Aes {
             inOffset: Int = 0,
             output: ByteArray = ByteArray(16),
             outOffset: Int = 0,
-            state: IntArray = IntArray(16),
         ): ByteArray {
-            val rk = roundKeys
-            for (i in 0 until 16) {
-                state[i] = (input[inOffset + i].toInt() and 0xFF) xor rk[i]
-            }
+            val k = rk
+            val te0 = TE0
+            val te1 = TE1
+            val te2 = TE2
+            val te3 = TE3
+            val sbox = SBOX
 
+            var s0 = readIntBE(input, inOffset) xor k[0]
+            var s1 = readIntBE(input, inOffset + 4) xor k[1]
+            var s2 = readIntBE(input, inOffset + 8) xor k[2]
+            var s3 = readIntBE(input, inOffset + 12) xor k[3]
+
+            var kOff = 4
             for (round in 1..9) {
-                subBytesAndShiftRows(state)
-                mixColumns(state)
-                addRoundKey(state, round * 16)
+                val t0 = te0[s0 ushr 24] xor te1[(s1 ushr 16) and 0xFF] xor te2[(s2 ushr 8) and 0xFF] xor te3[s3 and 0xFF] xor k[kOff]
+                val t1 = te0[s1 ushr 24] xor te1[(s2 ushr 16) and 0xFF] xor te2[(s3 ushr 8) and 0xFF] xor te3[s0 and 0xFF] xor k[kOff + 1]
+                val t2 = te0[s2 ushr 24] xor te1[(s3 ushr 16) and 0xFF] xor te2[(s0 ushr 8) and 0xFF] xor te3[s1 and 0xFF] xor k[kOff + 2]
+                val t3 = te0[s3 ushr 24] xor te1[(s0 ushr 16) and 0xFF] xor te2[(s1 ushr 8) and 0xFF] xor te3[s2 and 0xFF] xor k[kOff + 3]
+                s0 = t0
+                s1 = t1
+                s2 = t2
+                s3 = t3
+                kOff += 4
             }
 
-            subBytesAndShiftRows(state)
-            addRoundKey(state, 160)
+            val out0 = ((sbox[s0 ushr 24] shl 24) or (sbox[(s1 ushr 16) and 0xFF] shl 16) or (sbox[(s2 ushr 8) and 0xFF] shl 8) or sbox[s3 and 0xFF]) xor k[40]
+            val out1 = ((sbox[s1 ushr 24] shl 24) or (sbox[(s2 ushr 16) and 0xFF] shl 16) or (sbox[(s3 ushr 8) and 0xFF] shl 8) or sbox[s0 and 0xFF]) xor k[41]
+            val out2 = ((sbox[s2 ushr 24] shl 24) or (sbox[(s3 ushr 16) and 0xFF] shl 16) or (sbox[(s0 ushr 8) and 0xFF] shl 8) or sbox[s1 and 0xFF]) xor k[42]
+            val out3 = ((sbox[s3 ushr 24] shl 24) or (sbox[(s0 ushr 16) and 0xFF] shl 16) or (sbox[(s1 ushr 8) and 0xFF] shl 8) or sbox[s2 and 0xFF]) xor k[43]
 
-            for (i in 0 until 16) {
-                output[outOffset + i] = state[i].toByte()
-            }
+            writeIntBE(output, outOffset, out0)
+            writeIntBE(output, outOffset + 4, out1)
+            writeIntBE(output, outOffset + 8, out2)
+            writeIntBE(output, outOffset + 12, out3)
             return output
-        }
-
-        private fun subBytesAndShiftRows(s: IntArray) {
-            for (i in 0 until 16) s[i] = SBOX[s[i]]
-            // Row 1: shift left by 1
-            val t1 = s[1]; s[1] = s[5]; s[5] = s[9]; s[9] = s[13]; s[13] = t1
-            // Row 2: shift left by 2
-            val t2a = s[2]; val t2b = s[6]; s[2] = s[10]; s[6] = s[14]; s[10] = t2a; s[14] = t2b
-            // Row 3: shift left by 3 (right by 1)
-            val t3 = s[15]; s[15] = s[11]; s[11] = s[7]; s[7] = s[3]; s[3] = t3
-        }
-
-        private fun mixColumns(s: IntArray) {
-            for (c in 0 until 4) {
-                val i = c * 4
-                val a0 = s[i]
-                val a1 = s[i + 1]
-                val a2 = s[i + 2]
-                val a3 = s[i + 3]
-                val allXor = a0 xor a1 xor a2 xor a3
-                s[i] = a0 xor allXor xor xtime(a0 xor a1)
-                s[i + 1] = a1 xor allXor xor xtime(a1 xor a2)
-                s[i + 2] = a2 xor allXor xor xtime(a2 xor a3)
-                s[i + 3] = a3 xor allXor xor xtime(a3 xor a0)
-            }
-        }
-
-        private fun xtime(x: Int): Int {
-            val shifted = (x shl 1) and 0xFF
-            return if ((x and 0x80) != 0) shifted xor 0x1B else shifted
-        }
-
-        private fun addRoundKey(s: IntArray, roundKeyOffset: Int) {
-            val rk = roundKeys
-            for (i in 0 until 16) {
-                s[i] = s[i] xor rk[roundKeyOffset + i]
-            }
         }
     }
 
@@ -134,14 +137,16 @@ internal object Aes {
         val cmacK2: ByteArray,
     )
 
-    private val keyCache = arrayOfNulls<KeyContext>(16)
+    @OptIn(kotlin.concurrent.atomics.ExperimentalAtomicApi::class)
+    private val keyCache = kotlin.concurrent.atomics.AtomicArray<KeyContext?>(16) { null }
 
+    @OptIn(kotlin.concurrent.atomics.ExperimentalAtomicApi::class)
     private fun contextForKey(key: ByteArray): KeyContext {
         require(key.size == 16) { "AES-128 key must be 16 bytes" }
         val k0 = readULongBE(key, 0)
         val k1 = readULongBE(key, 8)
         val slot = ((k0 xor (k0 shr 32) xor k1 xor (k1 shr 32)).toInt()) and 15
-        val cached = keyCache[slot]
+        val cached = keyCache.loadAt(slot)
         if (cached != null && cached.k0 == k0 && cached.k1 == k1) {
             return cached
         }
@@ -151,7 +156,7 @@ internal object Aes {
         val cmacK1 = doubleSubkey(h)
         val cmacK2 = doubleSubkey(cmacK1)
         val created = KeyContext(k0, k1, cipher, h0, h1, cmacK1, cmacK2)
-        keyCache[slot] = created
+        keyCache.storeAt(slot, created)
         return created
     }
 
@@ -160,7 +165,12 @@ internal object Aes {
      */
     fun cmac(key: ByteArray, data: ByteArray): ByteArray {
         val ctx = contextForKey(key)
-        val cipher = ctx.cipher
+        val k = ctx.cipher.rk
+        val te0 = TE0
+        val te1 = TE1
+        val te2 = TE2
+        val te3 = TE3
+        val sbox = SBOX
         val k1 = ctx.cmacK1
         val k2 = ctx.cmacK2
 
@@ -185,21 +195,42 @@ internal object Aes {
             }
         }
 
-        val x = ByteArray(16)
-        val y = ByteArray(16)
-        val state = IntArray(16)
+        var x0 = 0
+        var x1 = 0
+        var x2 = 0
+        var x3 = 0
         for (blockIdx in 0 until n - 1) {
             val base = blockIdx * 16
-            for (i in 0 until 16) {
-                y[i] = (x[i].toInt() xor data[base + i].toInt()).toByte()
+            var s0 = x0 xor readIntBE(data, base) xor k[0]
+            var s1 = x1 xor readIntBE(data, base + 4) xor k[1]
+            var s2 = x2 xor readIntBE(data, base + 8) xor k[2]
+            var s3 = x3 xor readIntBE(data, base + 12) xor k[3]
+
+            var kOff = 4
+            for (round in 1..9) {
+                val t0 = te0[s0 ushr 24] xor te1[(s1 ushr 16) and 0xFF] xor te2[(s2 ushr 8) and 0xFF] xor te3[s3 and 0xFF] xor k[kOff]
+                val t1 = te0[s1 ushr 24] xor te1[(s2 ushr 16) and 0xFF] xor te2[(s3 ushr 8) and 0xFF] xor te3[s0 and 0xFF] xor k[kOff + 1]
+                val t2 = te0[s2 ushr 24] xor te1[(s3 ushr 16) and 0xFF] xor te2[(s0 ushr 8) and 0xFF] xor te3[s1 and 0xFF] xor k[kOff + 2]
+                val t3 = te0[s3 ushr 24] xor te1[(s0 ushr 16) and 0xFF] xor te2[(s1 ushr 8) and 0xFF] xor te3[s2 and 0xFF] xor k[kOff + 3]
+                s0 = t0
+                s1 = t1
+                s2 = t2
+                s3 = t3
+                kOff += 4
             }
-            cipher.encryptBlock(y, 0, x, 0, state)
+
+            x0 = ((sbox[s0 ushr 24] shl 24) or (sbox[(s1 ushr 16) and 0xFF] shl 16) or (sbox[(s2 ushr 8) and 0xFF] shl 8) or sbox[s3 and 0xFF]) xor k[40]
+            x1 = ((sbox[s1 ushr 24] shl 24) or (sbox[(s2 ushr 16) and 0xFF] shl 16) or (sbox[(s3 ushr 8) and 0xFF] shl 8) or sbox[s0 and 0xFF]) xor k[41]
+            x2 = ((sbox[s2 ushr 24] shl 24) or (sbox[(s3 ushr 16) and 0xFF] shl 16) or (sbox[(s0 ushr 8) and 0xFF] shl 8) or sbox[s1 and 0xFF]) xor k[42]
+            x3 = ((sbox[s3 ushr 24] shl 24) or (sbox[(s0 ushr 16) and 0xFF] shl 16) or (sbox[(s1 ushr 8) and 0xFF] shl 8) or sbox[s2 and 0xFF]) xor k[43]
         }
 
-        for (i in 0 until 16) {
-            y[i] = (x[i].toInt() xor mLast[i].toInt()).toByte()
-        }
-        return cipher.encryptBlock(y, 0, x, 0, state)
+        val y = ByteArray(16)
+        writeIntBE(y, 0, x0 xor readIntBE(mLast, 0))
+        writeIntBE(y, 4, x1 xor readIntBE(mLast, 4))
+        writeIntBE(y, 8, x2 xor readIntBE(mLast, 8))
+        writeIntBE(y, 12, x3 xor readIntBE(mLast, 12))
+        return ctx.cipher.encryptBlock(y, 0, y, 0)
     }
 
     private fun doubleSubkey(input: ByteArray): ByteArray {
@@ -225,11 +256,10 @@ internal object Aes {
     fun ccmEncrypt(key: ByteArray, nonce: ByteArray, aad: ByteArray, plaintext: ByteArray): Pair<ByteArray, ByteArray> {
         require(nonce.size in 7..13) { "CCM nonce must be 7..13 bytes" }
         val cipher = contextForKey(key).cipher
-        val state = IntArray(16)
-        val tag = computeCcmMac(cipher, nonce, aad, plaintext, state)
+        val tag = computeCcmMac(cipher, nonce, aad, plaintext, 0, plaintext.size)
         val ciphertext = ByteArray(plaintext.size)
         val s0 = ByteArray(16)
-        processCcmCtr(cipher, nonce, plaintext, ciphertext, s0, state)
+        processCcmCtr(cipher, nonce, plaintext, 0, plaintext.size, ciphertext, s0)
         for (i in 0 until 16) {
             tag[i] = (tag[i].toInt() xor s0[i].toInt()).toByte()
         }
@@ -239,16 +269,26 @@ internal object Aes {
     /**
      * Decrypts [ciphertext] and verifies its 16-byte authentication tag using AES-128-CCM.
      */
-    fun ccmDecrypt(key: ByteArray, nonce: ByteArray, aad: ByteArray, ciphertext: ByteArray, expectedTag: ByteArray): ByteArray {
+    fun ccmDecrypt(
+        key: ByteArray,
+        nonce: ByteArray,
+        aad: ByteArray,
+        ciphertext: ByteArray,
+        expectedTag: ByteArray,
+        ciphertextOffset: Int = 0,
+        ciphertextLength: Int = ciphertext.size - ciphertextOffset,
+    ): ByteArray {
         require(nonce.size in 7..13) { "CCM nonce must be 7..13 bytes" }
         require(expectedTag.size == 16) { "CCM tag must be 16 bytes" }
+        require(ciphertextOffset >= 0 && ciphertextLength >= 0 && ciphertextLength <= ciphertext.size - ciphertextOffset) {
+            "Invalid ciphertext bounds: offset=$ciphertextOffset, length=$ciphertextLength, size=${ciphertext.size}"
+        }
         val cipher = contextForKey(key).cipher
-        val state = IntArray(16)
-        val plaintext = ByteArray(ciphertext.size)
+        val plaintext = ByteArray(ciphertextLength)
         val s0 = ByteArray(16)
-        processCcmCtr(cipher, nonce, ciphertext, plaintext, s0, state)
+        processCcmCtr(cipher, nonce, ciphertext, ciphertextOffset, ciphertextLength, plaintext, s0)
 
-        val computedTag = computeCcmMac(cipher, nonce, aad, plaintext, state)
+        val computedTag = computeCcmMac(cipher, nonce, aad, plaintext, 0, plaintext.size)
         for (i in 0 until 16) {
             computedTag[i] = (computedTag[i].toInt() xor s0[i].toInt()).toByte()
         }
@@ -258,19 +298,26 @@ internal object Aes {
         return plaintext
     }
 
-    private fun computeCcmMac(cipher: Cipher, nonce: ByteArray, aad: ByteArray, plaintext: ByteArray, state: IntArray): ByteArray {
+    private fun computeCcmMac(
+        cipher: Cipher,
+        nonce: ByteArray,
+        aad: ByteArray,
+        plaintext: ByteArray,
+        plaintextOffset: Int,
+        plaintextLength: Int,
+    ): ByteArray {
         val q = 15 - nonce.size // L (for 11-byte nonce, q = 4)
         val flags = (if (aad.isNotEmpty()) 0x40 else 0x00) or (((16 - 2) / 2) shl 3) or (q - 1)
         val b0 = ByteArray(16)
         b0[0] = flags.toByte()
         nonce.copyInto(b0, 1)
-        var lenVal = plaintext.size.toLong()
+        var lenVal = plaintextLength.toLong()
         for (i in 0 until q) {
             b0[15 - i] = (lenVal and 0xFFL).toByte()
             lenVal = lenVal ushr 8
         }
 
-        val x = cipher.encryptBlock(b0, 0, ByteArray(16), 0, state)
+        val x = cipher.encryptBlock(b0, 0, ByteArray(16), 0)
         val block = ByteArray(16)
 
         if (aad.isNotEmpty()) {
@@ -290,50 +337,80 @@ internal object Aes {
                 aadEncoded[5] = (aad.size and 0xFF).toByte()
                 aad.copyInto(aadEncoded, 6)
             }
-            cbcMacUpdate(cipher, x, block, aadEncoded, state)
+            cbcMacUpdate(cipher, x, block, aadEncoded, 0, aadEncoded.size)
         }
 
-        if (plaintext.isNotEmpty()) {
-            cbcMacUpdate(cipher, x, block, plaintext, state)
+        if (plaintextLength > 0) {
+            cbcMacUpdate(cipher, x, block, plaintext, plaintextOffset, plaintextLength)
         }
         return x
     }
 
-    private fun cbcMacUpdate(cipher: Cipher, x: ByteArray, scratch: ByteArray, data: ByteArray, state: IntArray) {
+    private fun cbcMacUpdate(
+        cipher: Cipher,
+        x: ByteArray,
+        scratch: ByteArray,
+        data: ByteArray,
+        dataOffset: Int,
+        dataLength: Int,
+    ) {
         var offset = 0
-        while (offset < data.size) {
-            val chunk = minOf(16, data.size - offset)
+        val fullLimit = dataLength - 16
+        while (offset <= fullLimit) {
+            writeIntBE(scratch, 0, readIntBE(x, 0) xor readIntBE(data, dataOffset + offset))
+            writeIntBE(scratch, 4, readIntBE(x, 4) xor readIntBE(data, dataOffset + offset + 4))
+            writeIntBE(scratch, 8, readIntBE(x, 8) xor readIntBE(data, dataOffset + offset + 8))
+            writeIntBE(scratch, 12, readIntBE(x, 12) xor readIntBE(data, dataOffset + offset + 12))
+            cipher.encryptBlock(scratch, 0, x, 0)
+            offset += 16
+        }
+        if (offset < dataLength) {
+            val chunk = dataLength - offset
             for (i in 0 until 16) {
-                val b = if (i < chunk) data[offset + i].toInt() else 0
+                val b = if (i < chunk) data[dataOffset + offset + i].toInt() else 0
                 scratch[i] = (x[i].toInt() xor b).toByte()
             }
-            cipher.encryptBlock(scratch, 0, x, 0, state)
-            offset += 16
+            cipher.encryptBlock(scratch, 0, x, 0)
         }
     }
 
-    private fun processCcmCtr(cipher: Cipher, nonce: ByteArray, input: ByteArray, output: ByteArray, s0Out: ByteArray, state: IntArray) {
+    private fun processCcmCtr(
+        cipher: Cipher,
+        nonce: ByteArray,
+        input: ByteArray,
+        inputOffset: Int,
+        inputLength: Int,
+        output: ByteArray,
+        s0Out: ByteArray,
+    ) {
         val q = 15 - nonce.size
         val ctrBlock = ByteArray(16)
         ctrBlock[0] = (q - 1).toByte()
         nonce.copyInto(ctrBlock, 1)
 
         // Counter = 0 -> S_0
-        cipher.encryptBlock(ctrBlock, 0, s0Out, 0, state)
+        cipher.encryptBlock(ctrBlock, 0, s0Out, 0)
 
         val keystream = ByteArray(16)
         var counter = 1L
         var offset = 0
-        while (offset < input.size) {
+        while (offset < inputLength) {
             var c = counter
             for (i in 0 until q) {
                 ctrBlock[15 - i] = (c and 0xFFL).toByte()
                 c = c ushr 8
             }
-            cipher.encryptBlock(ctrBlock, 0, keystream, 0, state)
-            val chunk = minOf(16, input.size - offset)
-            for (i in 0 until chunk) {
-                output[offset + i] = (input[offset + i].toInt() xor keystream[i].toInt()).toByte()
+            cipher.encryptBlock(ctrBlock, 0, keystream, 0)
+            val chunk = minOf(16, inputLength - offset)
+            if (chunk == 16) {
+                writeIntBE(output, offset, readIntBE(input, inputOffset + offset) xor readIntBE(keystream, 0))
+                writeIntBE(output, offset + 4, readIntBE(input, inputOffset + offset + 4) xor readIntBE(keystream, 4))
+                writeIntBE(output, offset + 8, readIntBE(input, inputOffset + offset + 8) xor readIntBE(keystream, 8))
+                writeIntBE(output, offset + 12, readIntBE(input, inputOffset + offset + 12) xor readIntBE(keystream, 12))
+            } else {
+                for (i in 0 until chunk) {
+                    output[offset + i] = (input[inputOffset + offset + i].toInt() xor keystream[i].toInt()).toByte()
+                }
             }
             offset += 16
             counter++
@@ -347,59 +424,115 @@ internal object Aes {
     fun gcmEncrypt(key: ByteArray, iv: ByteArray, aad: ByteArray, plaintext: ByteArray): Pair<ByteArray, ByteArray> {
         require(iv.size == 12) { "GCM IV must be 12 bytes" }
         val ctx = contextForKey(key)
-        val aesState = IntArray(16)
 
         val j0 = ByteArray(16)
         iv.copyInto(j0, 0, 0, 12)
         j0[15] = 1
 
         val ciphertext = ByteArray(plaintext.size)
-        processGcmCtr(ctx.cipher, j0, plaintext, ciphertext, aesState)
+        processGcmCtr(ctx.cipher, j0, plaintext, 0, plaintext.size, ciphertext)
 
-        val tag = computeGcmTag(ctx, j0, aad, ciphertext, aesState)
+        val tag = computeGcmTag(ctx, j0, aad, ciphertext, 0, ciphertext.size)
         return ciphertext to tag
     }
 
     /**
      * Decrypts [ciphertext] and verifies its 16-byte authentication tag using AES-128-GCM.
      */
-    fun gcmDecrypt(key: ByteArray, iv: ByteArray, aad: ByteArray, ciphertext: ByteArray, expectedTag: ByteArray): ByteArray {
+    fun gcmDecrypt(
+        key: ByteArray,
+        iv: ByteArray,
+        aad: ByteArray,
+        ciphertext: ByteArray,
+        expectedTag: ByteArray,
+        ciphertextOffset: Int = 0,
+        ciphertextLength: Int = ciphertext.size - ciphertextOffset,
+    ): ByteArray {
         require(iv.size == 12) { "GCM IV must be 12 bytes" }
         require(expectedTag.size == 16) { "GCM tag must be 16 bytes" }
+        require(ciphertextOffset >= 0 && ciphertextLength >= 0 && ciphertextLength <= ciphertext.size - ciphertextOffset) {
+            "Invalid ciphertext bounds: offset=$ciphertextOffset, length=$ciphertextLength, size=${ciphertext.size}"
+        }
         val ctx = contextForKey(key)
-        val aesState = IntArray(16)
 
         val j0 = ByteArray(16)
         iv.copyInto(j0, 0, 0, 12)
         j0[15] = 1
 
-        val computedTag = computeGcmTag(ctx, j0, aad, ciphertext, aesState)
+        val computedTag = computeGcmTag(ctx, j0, aad, ciphertext, ciphertextOffset, ciphertextLength)
         if (!constantTimeEquals(computedTag, expectedTag)) {
             throw IllegalStateException("SMB3 AES-128-GCM authentication tag mismatch")
         }
 
-        val plaintext = ByteArray(ciphertext.size)
-        processGcmCtr(ctx.cipher, j0, ciphertext, plaintext, aesState)
+        val plaintext = ByteArray(ciphertextLength)
+        processGcmCtr(ctx.cipher, j0, ciphertext, ciphertextOffset, ciphertextLength, plaintext)
         return plaintext
     }
 
-    private fun processGcmCtr(cipher: Cipher, j0: ByteArray, input: ByteArray, output: ByteArray, state: IntArray) {
-        val cb = j0.copyOf()
-        val keystream = ByteArray(16)
-        var counter = 2u
+    private fun processGcmCtr(
+        cipher: Cipher,
+        j0: ByteArray,
+        input: ByteArray,
+        inputOffset: Int,
+        inputLength: Int,
+        output: ByteArray,
+    ) {
+        val k = cipher.rk
+        val te0 = TE0
+        val te1 = TE1
+        val te2 = TE2
+        val te3 = TE3
+        val sbox = SBOX
+
+        val cb0 = readIntBE(j0, 0) xor k[0]
+        val cb1 = readIntBE(j0, 4) xor k[1]
+        val cb2 = readIntBE(j0, 8) xor k[2]
+        var counter = 2
         var offset = 0
-        while (offset < input.size) {
-            cb[12] = ((counter shr 24) and 0xFFu).toByte()
-            cb[13] = ((counter shr 16) and 0xFFu).toByte()
-            cb[14] = ((counter shr 8) and 0xFFu).toByte()
-            cb[15] = (counter and 0xFFu).toByte()
-            cipher.encryptBlock(cb, 0, keystream, 0, state)
-            val chunk = minOf(16, input.size - offset)
-            for (i in 0 until chunk) {
-                output[offset + i] = (input[offset + i].toInt() xor keystream[i].toInt()).toByte()
+        val fullLimit = inputLength - 16
+
+        while (offset <= fullLimit) {
+            var s0 = cb0
+            var s1 = cb1
+            var s2 = cb2
+            var s3 = counter xor k[3]
+
+            var kOff = 4
+            for (round in 1..9) {
+                val t0 = te0[s0 ushr 24] xor te1[(s1 ushr 16) and 0xFF] xor te2[(s2 ushr 8) and 0xFF] xor te3[s3 and 0xFF] xor k[kOff]
+                val t1 = te0[s1 ushr 24] xor te1[(s2 ushr 16) and 0xFF] xor te2[(s3 ushr 8) and 0xFF] xor te3[s0 and 0xFF] xor k[kOff + 1]
+                val t2 = te0[s2 ushr 24] xor te1[(s3 ushr 16) and 0xFF] xor te2[(s0 ushr 8) and 0xFF] xor te3[s1 and 0xFF] xor k[kOff + 2]
+                val t3 = te0[s3 ushr 24] xor te1[(s0 ushr 16) and 0xFF] xor te2[(s1 ushr 8) and 0xFF] xor te3[s2 and 0xFF] xor k[kOff + 3]
+                s0 = t0
+                s1 = t1
+                s2 = t2
+                s3 = t3
+                kOff += 4
             }
+
+            val ks0 = ((sbox[s0 ushr 24] shl 24) or (sbox[(s1 ushr 16) and 0xFF] shl 16) or (sbox[(s2 ushr 8) and 0xFF] shl 8) or sbox[s3 and 0xFF]) xor k[40]
+            val ks1 = ((sbox[s1 ushr 24] shl 24) or (sbox[(s2 ushr 16) and 0xFF] shl 16) or (sbox[(s3 ushr 8) and 0xFF] shl 8) or sbox[s0 and 0xFF]) xor k[41]
+            val ks2 = ((sbox[s2 ushr 24] shl 24) or (sbox[(s3 ushr 16) and 0xFF] shl 16) or (sbox[(s0 ushr 8) and 0xFF] shl 8) or sbox[s1 and 0xFF]) xor k[42]
+            val ks3 = ((sbox[s3 ushr 24] shl 24) or (sbox[(s0 ushr 16) and 0xFF] shl 16) or (sbox[(s1 ushr 8) and 0xFF] shl 8) or sbox[s2 and 0xFF]) xor k[43]
+
+            val inPos = inputOffset + offset
+            writeIntBE(output, offset, readIntBE(input, inPos) xor ks0)
+            writeIntBE(output, offset + 4, readIntBE(input, inPos + 4) xor ks1)
+            writeIntBE(output, offset + 8, readIntBE(input, inPos + 8) xor ks2)
+            writeIntBE(output, offset + 12, readIntBE(input, inPos + 12) xor ks3)
+
             offset += 16
             counter++
+        }
+
+        if (offset < inputLength) {
+            val cb = j0.copyOf()
+            writeIntBE(cb, 12, counter)
+            val keystream = cipher.encryptBlock(cb, 0, ByteArray(16), 0)
+            val chunk = inputLength - offset
+            for (i in 0 until chunk) {
+                output[offset + i] = (input[inputOffset + offset + i].toInt() xor keystream[i].toInt()).toByte()
+            }
         }
     }
 
@@ -433,21 +566,28 @@ internal object Aes {
         return h0 to h1
     }
 
-    private fun computeGcmTag(ctx: KeyContext, j0: ByteArray, aad: ByteArray, ciphertext: ByteArray, aesState: IntArray): ByteArray {
+    private fun computeGcmTag(
+        ctx: KeyContext,
+        j0: ByteArray,
+        aad: ByteArray,
+        ciphertext: ByteArray,
+        ciphertextOffset: Int,
+        ciphertextLength: Int,
+    ): ByteArray {
         val h0 = ctx.h0
         val h1 = ctx.h1
         val state = ULongArray(2)
-        ghashUpdate(state, h0, h1, aad)
-        ghashUpdate(state, h0, h1, ciphertext)
+        ghashUpdate(state, h0, h1, aad, 0, aad.size)
+        ghashUpdate(state, h0, h1, ciphertext, ciphertextOffset, ciphertextLength)
 
         val aadBits = aad.size.toULong() * 8uL
-        val ctBits = ciphertext.size.toULong() * 8uL
+        val ctBits = ciphertextLength.toULong() * 8uL
         state[0] = state[0] xor aadBits
         state[1] = state[1] xor ctBits
         gfMultiplyShoup(state, h0, h1)
 
         val out = ByteArray(16)
-        val s = ctx.cipher.encryptBlock(j0, 0, out, 0, aesState)
+        val s = ctx.cipher.encryptBlock(j0, 0, out, 0)
         val tag0 = state[0] xor readULongBE(s, 0)
         val tag1 = state[1] xor readULongBE(s, 8)
         writeULongBE(out, 0, tag0)
@@ -455,21 +595,28 @@ internal object Aes {
         return out
     }
 
-    private fun ghashUpdate(state: ULongArray, h0: ULongArray, h1: ULongArray, data: ByteArray) {
+    private fun ghashUpdate(
+        state: ULongArray,
+        h0: ULongArray,
+        h1: ULongArray,
+        data: ByteArray,
+        dataOffset: Int,
+        dataLength: Int,
+    ) {
         var offset = 0
-        val fullLimit = data.size - 16
+        val fullLimit = dataLength - 16
         while (offset <= fullLimit) {
-            state[0] = state[0] xor readULongBE(data, offset)
-            state[1] = state[1] xor readULongBE(data, offset + 8)
+            state[0] = state[0] xor readULongBE(data, dataOffset + offset)
+            state[1] = state[1] xor readULongBE(data, dataOffset + offset + 8)
             gfMultiplyShoup(state, h0, h1)
             offset += 16
         }
-        if (offset < data.size) {
+        if (offset < dataLength) {
             var b0 = 0uL
             var b1 = 0uL
-            val rem = data.size - offset
+            val rem = dataLength - offset
             for (i in 0 until rem) {
-                val v = data[offset + i].toULong() and 0xFFuL
+                val v = data[dataOffset + offset + i].toULong() and 0xFFuL
                 if (i < 8) {
                     b0 = b0 or (v shl ((7 - i) * 8))
                 } else {
@@ -522,18 +669,29 @@ internal object Aes {
         state[1] = z1
     }
 
+    private fun readIntBE(buf: ByteArray, offset: Int): Int {
+        return ((buf[offset].toInt() and 0xFF) shl 24) or
+            ((buf[offset + 1].toInt() and 0xFF) shl 16) or
+            ((buf[offset + 2].toInt() and 0xFF) shl 8) or
+            (buf[offset + 3].toInt() and 0xFF)
+    }
+
+    private fun writeIntBE(buf: ByteArray, offset: Int, value: Int) {
+        buf[offset] = (value ushr 24).toByte()
+        buf[offset + 1] = (value ushr 16).toByte()
+        buf[offset + 2] = (value ushr 8).toByte()
+        buf[offset + 3] = value.toByte()
+    }
+
     private fun readULongBE(buf: ByteArray, offset: Int): ULong {
-        var v = 0uL
-        for (i in 0 until 8) {
-            v = (v shl 8) or (buf[offset + i].toULong() and 0xFFuL)
-        }
-        return v
+        val hi = readIntBE(buf, offset).toULong() and 0xFFFFFFFFuL
+        val lo = readIntBE(buf, offset + 4).toULong() and 0xFFFFFFFFuL
+        return (hi shl 32) or lo
     }
 
     private fun writeULongBE(buf: ByteArray, offset: Int, value: ULong) {
-        for (i in 0 until 8) {
-            buf[offset + i] = ((value shr ((7 - i) * 8)) and 0xFFuL).toByte()
-        }
+        writeIntBE(buf, offset, (value shr 32).toInt())
+        writeIntBE(buf, offset + 4, value.toInt())
     }
 
     internal fun constantTimeEquals(a: ByteArray, b: ByteArray): Boolean {

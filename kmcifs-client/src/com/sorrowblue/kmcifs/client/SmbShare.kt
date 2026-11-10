@@ -477,13 +477,13 @@ class SmbShare internal constructor(
         SmbMessages.parseSimpleSuccessResponse(responses[2], "CLOSE")
     }
 
-    internal suspend fun closeFileId(fileId: com.sorrowblue.kmcifs.client.protocol.SmbFileId) {
+    internal suspend fun closeFileId(fileId: SmbFileId) {
         val closeReq = SmbMessages.buildCloseRequest(
             sessionId = client.sessionId,
             treeId = treeId,
             fileId = fileId,
         )
-        val closeResp = client.executeCommand(closeReq, encryptShare)
+        val closeResp = client.executeCommand(closeReq, encryptShare, cancellable = false)
         SmbMessages.parseSimpleSuccessResponse(closeResp, "CLOSE")
     }
 
@@ -498,7 +498,7 @@ class SmbShare internal constructor(
                 sessionId = client.sessionId,
                 treeId = treeId,
             )
-            client.executeCommand(req, encryptShare)
+            client.executeCommand(req, encryptShare, cancellable = false)
         }
     }
 

@@ -9,6 +9,8 @@ dependencies:
   - $libs.libvlc.all
 
 settings:
+  jvm:
+    release: 11
   compose:
     enabled: true
   android:
