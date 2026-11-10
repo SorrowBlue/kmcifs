@@ -94,6 +94,8 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: false
 
       - name: Build Zensical documentation site
         run: |
