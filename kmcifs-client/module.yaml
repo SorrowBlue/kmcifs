@@ -38,7 +38,7 @@ settings:
     signArtifacts: true
     mavenCentral:
       enabled: true
-      publishingMode: manual
+      publishingMode: auto
     pom:
       url: https://github.com/sorrowblue/kmcifs
       licenses:
