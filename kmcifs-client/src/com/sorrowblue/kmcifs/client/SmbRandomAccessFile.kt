@@ -6,6 +6,9 @@ import com.sorrowblue.kmcifs.client.protocol.SmbCreateOptions
 import com.sorrowblue.kmcifs.client.protocol.SmbFileAttributes
 import com.sorrowblue.kmcifs.client.protocol.SmbFileMetadata
 import com.sorrowblue.kmcifs.client.protocol.SmbShareAccess
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -107,6 +110,14 @@ class SmbRandomAccessFile(
     private var closed: Boolean = false
     private var currentPosition: Long = 0L
 
+    /**
+     * Optional [Job] of the active caller coroutine. When set and cancelled (`isCancelled == true`),
+     * synchronous operations ([read], [write], [length], [setLength], [flush]) immediately abort
+     * with [CancellationException] instead of continuing to issue SMB requests.
+     */
+    @kotlin.concurrent.Volatile
+    var callerJob: Job? = null
+
     private var bufferStartOffset: Long = -1L
     private var bufferData: ByteArray = ByteArray(0)
     private var bufferValidLength: Int = 0
@@ -182,6 +193,7 @@ class SmbRandomAccessFile(
      */
     fun read(): Int {
         check(!closed) { "SmbRandomAccessFile is closed" }
+        checkCallerNotCancelled()
         val fastFile = smbFile
         val pos = currentPosition
         if (fastFile != null) {
@@ -199,10 +211,10 @@ class SmbRandomAccessFile(
             }
         }
 
-        return runBlocking {
+        return runCancellableBlocking {
             val file = ensureOpenLocked()
             val curPos = currentPosition
-            if (curPos >= file.size) return@runBlocking -1
+            if (curPos >= file.size) return@runCancellableBlocking -1
 
             if (bufferSize > 0) {
                 if (!isOffsetInBuffer(curPos)) {
@@ -215,12 +227,12 @@ class SmbRandomAccessFile(
                 if (bufStart >= 0L && rel >= 0L && rel < bufLen && rel < buf.size) {
                     val value = buf[rel.toInt()].toInt() and 0xFF
                     currentPosition = curPos + 1L
-                    return@runBlocking value
+                    return@runCancellableBlocking value
                 }
             }
 
             val n = file.readInto(curPos, scratchBuffer, 0, 1)
-            if (n <= 0) return@runBlocking -1
+            if (n <= 0) return@runCancellableBlocking -1
             currentPosition = curPos + 1L
             scratchBuffer[0].toInt() and 0xFF
         }
@@ -261,6 +273,7 @@ class SmbRandomAccessFile(
             "Invalid buffer bounds: off=$off, len=$len, size=${b.size}"
         }
         check(!closed) { "SmbRandomAccessFile is closed" }
+        checkCallerNotCancelled()
         if (len == 0) return 0
 
         // Fast path: バッファ内で完結する読み取りは runBlocking を介さずオンメモリコピーで即座に返す
@@ -293,12 +306,12 @@ class SmbRandomAccessFile(
             }
         }
 
-        return runBlocking {
+        return runCancellableBlocking {
             val file = ensureOpenLocked()
-            if (currentPosition >= file.size) return@runBlocking -1
+            if (currentPosition >= file.size) return@runCancellableBlocking -1
 
             val availableInFile = (file.size - currentPosition).coerceAtMost(len.toLong()).toInt()
-            if (availableInFile <= 0) return@runBlocking -1
+            if (availableInFile <= 0) return@runCancellableBlocking -1
 
             var totalRead = 0
             var dstOffset = off
@@ -321,7 +334,7 @@ class SmbRandomAccessFile(
             }
 
             if (remaining == 0) {
-                return@runBlocking totalRead
+                return@runCancellableBlocking totalRead
             }
 
             // 2. 残りの要求サイズがバッファサイズ以上なら直接 SMB READ を発行する（ゼロコピー）
@@ -331,7 +344,7 @@ class SmbRandomAccessFile(
                     currentPosition += readCount
                     totalRead += readCount
                 }
-                return@runBlocking if (totalRead == 0) -1 else totalRead
+                return@runCancellableBlocking if (totalRead == 0) -1 else totalRead
             }
 
             // 3. 小さな読み取りはバッファを補充してからコピーする
@@ -410,9 +423,9 @@ class SmbRandomAccessFile(
     fun readInt(): Int {
         readFully(scratchBuffer, 0, 4)
         return ((scratchBuffer[0].toInt() and 0xFF) shl 24) or
-            ((scratchBuffer[1].toInt() and 0xFF) shl 16) or
-            ((scratchBuffer[2].toInt() and 0xFF) shl 8) or
-            (scratchBuffer[3].toInt() and 0xFF)
+                ((scratchBuffer[1].toInt() and 0xFF) shl 16) or
+                ((scratchBuffer[2].toInt() and 0xFF) shl 8) or
+                (scratchBuffer[3].toInt() and 0xFF)
     }
 
     /**
@@ -421,13 +434,13 @@ class SmbRandomAccessFile(
     fun readLong(): Long {
         readFully(scratchBuffer, 0, 8)
         return ((scratchBuffer[0].toLong() and 0xFFL) shl 56) or
-            ((scratchBuffer[1].toLong() and 0xFFL) shl 48) or
-            ((scratchBuffer[2].toLong() and 0xFFL) shl 40) or
-            ((scratchBuffer[3].toLong() and 0xFFL) shl 32) or
-            ((scratchBuffer[4].toLong() and 0xFFL) shl 24) or
-            ((scratchBuffer[5].toLong() and 0xFFL) shl 16) or
-            ((scratchBuffer[6].toLong() and 0xFFL) shl 8) or
-            (scratchBuffer[7].toLong() and 0xFFL)
+                ((scratchBuffer[1].toLong() and 0xFFL) shl 48) or
+                ((scratchBuffer[2].toLong() and 0xFFL) shl 40) or
+                ((scratchBuffer[3].toLong() and 0xFFL) shl 32) or
+                ((scratchBuffer[4].toLong() and 0xFFL) shl 24) or
+                ((scratchBuffer[5].toLong() and 0xFFL) shl 16) or
+                ((scratchBuffer[6].toLong() and 0xFFL) shl 8) or
+                (scratchBuffer[7].toLong() and 0xFFL)
     }
 
     /**
@@ -456,23 +469,27 @@ class SmbRandomAccessFile(
      * Writes [len] bytes from [b] starting at offset [off] at the current position and advances
      * the file pointer by the number of bytes written.
      */
-    fun write(b: ByteArray, off: Int, len: Int): Int = runBlocking {
+    fun write(b: ByteArray, off: Int, len: Int): Int {
+        check(!closed) { "SmbRandomAccessFile is closed" }
         check(mode.writable) { "File \"$path\" is opened in read-only mode (${mode.modeString})" }
         require(off >= 0 && len >= 0 && len <= b.size - off) {
             "Invalid buffer bounds: off=$off, len=$len, size=${b.size}"
         }
-        val file = ensureOpenLocked()
-        if (len == 0) return@runBlocking 0
+        checkCallerNotCancelled()
+        return runCancellableBlocking {
+            val file = ensureOpenLocked()
+            if (len == 0) return@runCancellableBlocking 0
 
-        invalidateBuffer()
-        val written = file.write(
-            offset = currentPosition,
-            data = b,
-            startIndex = off,
-            length = len,
-        )
-        currentPosition += written
-        written
+            invalidateBuffer()
+            val written = file.write(
+                offset = currentPosition,
+                data = b,
+                startIndex = off,
+                length = len,
+            )
+            currentPosition += written
+            written
+        }
     }
 
     /**
@@ -523,22 +540,30 @@ class SmbRandomAccessFile(
      * If the current [position] is greater than [newLength], [position] is set to [newLength]
      * (matching `java.io.RandomAccessFile.setLength`).
      */
-    fun setLength(newLength: Long) = runBlocking {
+    fun setLength(newLength: Long) {
+        check(!closed) { "SmbRandomAccessFile is closed" }
         check(mode.writable) { "File \"$path\" is opened in read-only mode (${mode.modeString})" }
-        val file = ensureOpenLocked()
-        invalidateBuffer()
-        file.setLength(newLength)
-        if (currentPosition > newLength) {
-            currentPosition = newLength
+        checkCallerNotCancelled()
+        runCancellableBlocking {
+            val file = ensureOpenLocked()
+            invalidateBuffer()
+            file.setLength(newLength)
+            if (currentPosition > newLength) {
+                currentPosition = newLength
+            }
         }
     }
 
     /**
      * Flushes server-side write buffers for this file to persistent storage (`SMB2 FLUSH`).
      */
-    fun flush() = runBlocking {
-        val file = ensureOpenLocked()
-        file.flush()
+    fun flush() {
+        check(!closed) { "SmbRandomAccessFile is closed" }
+        checkCallerNotCancelled()
+        runCancellableBlocking {
+            val file = ensureOpenLocked()
+            file.flush()
+        }
     }
 
     /**
@@ -547,6 +572,7 @@ class SmbRandomAccessFile(
     suspend fun closeSuspend() {
         if (closed) return
         closed = true
+        callerJob = null
         invalidateBuffer()
         bufferData = ByteArray(0)
         val file = smbFile
@@ -563,7 +589,52 @@ class SmbRandomAccessFile(
 
     private fun requireOpenFile(): SmbFile {
         check(!closed) { "SmbRandomAccessFile is closed" }
-        return smbFile ?: runBlocking { ensureOpenLocked() }
+        checkCallerNotCancelled()
+        return smbFile ?: runCancellableBlocking { ensureOpenLocked() }
+    }
+
+    private fun checkCallerNotCancelled() {
+        val job = callerJob ?: return
+        if (job.isCancelled) {
+            throw CancellationException("SMB random-access operation cancelled")
+        }
+    }
+
+    private fun <T> runCancellableBlocking(block: suspend () -> T): T {
+        val job = callerJob
+        if (job != null && job.isCancelled) {
+            throw CancellationException("SMB random-access operation cancelled")
+        }
+        return runBlocking {
+            if (job == null) {
+                block()
+            } else {
+                val blockingScope = this
+                // Attach a child CompletableJob so parent Cancelling transition (onCancelling = true)
+                // immediately completes watcher even while parent's coroutine body is blocked inside JNI + runBlocking
+                val watcher = Job(job)
+                val handle = watcher.invokeOnCompletion { cause ->
+                    if (job.isCancelled) {
+                        blockingScope.cancel(
+                            cause as? CancellationException
+                                ?: CancellationException(
+                                    "SMB random-access operation cancelled",
+                                    cause
+                                ),
+                        )
+                    }
+                }
+                try {
+                    if (job.isCancelled) {
+                        throw CancellationException("SMB random-access operation cancelled")
+                    }
+                    block()
+                } finally {
+                    handle.dispose()
+                    watcher.complete()
+                }
+            }
+        }
     }
 
     private suspend fun ensureOpenLocked(): SmbFile {
@@ -585,7 +656,8 @@ class SmbRandomAccessFile(
         } else {
             SmbCreateDisposition.FILE_OPEN
         }
-        var createOptions = SmbCreateOptions.FILE_NON_DIRECTORY_FILE or SmbCreateOptions.FILE_SYNCHRONOUS_IO_NONALERT
+        var createOptions =
+            SmbCreateOptions.FILE_NON_DIRECTORY_FILE or SmbCreateOptions.FILE_SYNCHRONOUS_IO_NONALERT
         if (mode.writeThrough) {
             createOptions = createOptions or SmbCreateOptions.FILE_WRITE_THROUGH
         }
@@ -603,9 +675,7 @@ class SmbRandomAccessFile(
     }
 
     private fun isOffsetInBuffer(offset: Long): Boolean {
-        return bufferStartOffset >= 0L &&
-            offset >= bufferStartOffset &&
-            offset < bufferStartOffset + bufferValidLength
+        return bufferStartOffset in 0L..offset && offset < bufferStartOffset + bufferValidLength
     }
 
     private suspend fun fillBufferLocked(file: SmbFile, fromOffset: Long) {
