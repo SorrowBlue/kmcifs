@@ -55,52 +55,98 @@ runs:
         echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
         echo "snapshot_version=${SNAPSHOT_VERSION}" >> "$GITHUB_OUTPUT"
 
+        mkdir -p ~/.konan
+
         case "$RUNNER_OS" in
           Linux)
             echo "cli_cache_path=~/.cache/JetBrains/Kotlin/cli" >> "$GITHUB_OUTPUT"
             {
+              echo "toolchain_cache_path<<EOF"
+              echo "~/.konan"
+              echo "~/.gradle/wrapper"
+              echo "!~/.gradle/wrapper/**/*.lock"
+              echo "EOF"
               echo "deps_cache_path<<EOF"
               echo "~/.cache/JetBrains/Kotlin"
               echo "!~/.cache/JetBrains/Kotlin/cli"
-              echo "~/.local/share/JetBrains/Kotlin"
-              echo "~/.m2/repository"
+              echo "!~/.cache/JetBrains/Kotlin/telemetry"
+              echo "~/.gradle/caches"
+              echo "!~/.gradle/caches/**/*.lock"
+              echo "!~/.gradle/caches/**/gc.properties"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
             ;;
           macOS)
             echo "cli_cache_path=~/Library/Caches/JetBrains/Kotlin/cli" >> "$GITHUB_OUTPUT"
             {
+              echo "toolchain_cache_path<<EOF"
+              echo "~/.konan"
+              echo "EOF"
               echo "deps_cache_path<<EOF"
               echo "~/Library/Caches/JetBrains/Kotlin"
               echo "!~/Library/Caches/JetBrains/Kotlin/cli"
-              echo "~/.m2/repository"
+              echo "!~/Library/Caches/JetBrains/Kotlin/telemetry"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
             ;;
           Windows)
             echo "cli_cache_path=~/AppData/Local/JetBrains/Kotlin/cli" >> "$GITHUB_OUTPUT"
             {
+              echo "toolchain_cache_path<<EOF"
+              echo "~/.konan"
+              echo "EOF"
               echo "deps_cache_path<<EOF"
               echo "~/AppData/Local/JetBrains/Kotlin"
               echo "!~/AppData/Local/JetBrains/Kotlin/cli"
-              echo "~/.m2/repository"
+              echo "!~/AppData/Local/JetBrains/Kotlin/telemetry"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
             ;;
         esac
 
     - name: Cache Kotlin Toolchain CLI
-      if: inputs.cache == 'true'
+      if: inputs.cache == 'true' && github.event_name != 'pull_request'
       uses: actions/cache@v6.1.0
       with:
         path: ${{ steps.meta.outputs.cli_cache_path }}
         key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin', 'kotlin.bat') }}
 
+    - name: Restore Kotlin Toolchain CLI (read-only)
+      if: inputs.cache == 'true' && github.event_name == 'pull_request'
+      uses: actions/cache/restore@v6.1.0
+      with:
+        path: ${{ steps.meta.outputs.cli_cache_path }}
+        key: ${{ runner.os }}-kotlin-cli-${{ hashFiles('kotlin', 'kotlin.bat') }}
+
+    - name: Cache Kotlin Native and Gradle toolchains
+      if: inputs.cache == 'true' && github.event_name != 'pull_request'
+      uses: actions/cache@v6.1.0
+      with:
+        path: ${{ steps.meta.outputs.toolchain_cache_path }}
+        key: ${{ runner.os }}-kotlin-toolchains-${{ hashFiles('kotlin', 'kotlin.bat') }}-${{ github.job }}
+
+    - name: Restore Kotlin Native and Gradle toolchains (read-only)
+      if: inputs.cache == 'true' && github.event_name == 'pull_request'
+      uses: actions/cache/restore@v6.1.0
+      with:
+        path: ${{ steps.meta.outputs.toolchain_cache_path }}
+        key: ${{ runner.os }}-kotlin-toolchains-${{ hashFiles('kotlin', 'kotlin.bat') }}-${{ github.job }}
+        restore-keys: |
+          ${{ runner.os }}-kotlin-toolchains-${{ hashFiles('kotlin', 'kotlin.bat') }}-
+
     - name: Cache Kotlin dependencies
-      if: inputs.cache == 'true'
+      if: inputs.cache == 'true' && github.event_name != 'pull_request'
       uses: actions/cache@v6.1.0
       with:
         path: ${{ steps.meta.outputs.deps_cache_path }}
-        key: ${{ runner.os }}-kotlin-deps-${{ hashFiles('project.yaml', 'libs.versions.toml', '**/module.yaml') }}
+        key: ${{ runner.os }}-kotlin-deps-${{ github.job }}-${{ hashFiles('kotlin', 'kotlin.bat', 'libs.versions.toml') }}
+
+    - name: Restore Kotlin dependencies (read-only)
+      if: inputs.cache == 'true' && github.event_name == 'pull_request'
+      uses: actions/cache/restore@v6.1.0
+      with:
+        path: ${{ steps.meta.outputs.deps_cache_path }}
+        key: ${{ runner.os }}-kotlin-deps-${{ github.job }}-${{ hashFiles('kotlin', 'kotlin.bat', 'libs.versions.toml') }}
         restore-keys: |
+          ${{ runner.os }}-kotlin-deps-${{ github.job }}-
           ${{ runner.os }}-kotlin-deps-
