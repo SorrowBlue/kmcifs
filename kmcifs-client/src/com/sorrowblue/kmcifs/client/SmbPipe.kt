@@ -61,7 +61,7 @@ class SmbPipeShare internal constructor(
             treeId = treeId,
             fileId = fileId,
         )
-        val closeResp = client.executeCommand(closeReq, encryptShare)
+        val closeResp = client.executeCommand(closeReq, encryptShare, cancellable = false)
         SmbMessages.parseSimpleSuccessResponse(closeResp, "CLOSE (Pipe)")
     }
 
@@ -73,7 +73,7 @@ class SmbPipeShare internal constructor(
                 sessionId = client.sessionId,
                 treeId = treeId,
             )
-            client.executeCommand(req, encryptShare)
+            client.executeCommand(req, encryptShare, cancellable = false)
         }
     }
 

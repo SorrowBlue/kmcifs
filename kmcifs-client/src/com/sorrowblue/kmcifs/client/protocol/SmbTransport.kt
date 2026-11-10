@@ -11,7 +11,11 @@ import io.ktor.utils.io.readFully
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeout
+import kotlin.time.Duration
 
 /**
  * Transport abstraction for sending and receiving SMB packets framed with a 4-byte stream length prefix over Direct TCP (port 445).
@@ -73,19 +77,34 @@ internal class KtorTcpSmbTransport private constructor(
     }
 
     companion object {
-        suspend fun connect(host: String, port: Int, connectTimeoutMillis: Long): KtorTcpSmbTransport {
-            val selectorManager = SelectorManager(Dispatchers.IO)
+        internal val transportDispatcher = Dispatchers.IO.limitedParallelism(4)
+
+        suspend fun connect(host: String, port: Int, connectTimeout: Duration): KtorTcpSmbTransport {
+            val selectorManager = SelectorManager(transportDispatcher)
             var socket: Socket? = null
             return try {
-                val connected = withTimeout(connectTimeoutMillis) {
+                val connected = withTimeout(connectTimeout) {
                     aSocket(selectorManager).tcp().connect(host, port) {
                         noDelay = true
+                        receiveBufferSize = 256 * 1024
+                        sendBufferSize = 256 * 1024
                     }
                 }
                 socket = connected
                 val readChannel = connected.openReadChannel()
                 val writeChannel = connected.openWriteChannel(autoFlush = false)
                 KtorTcpSmbTransport(selectorManager, connected, readChannel, writeChannel)
+            } catch (e: TimeoutCancellationException) {
+                runCatching { socket?.close() }
+                runCatching { selectorManager.close() }
+                if (!currentCoroutineContext().isActive) {
+                    throw e
+                }
+                throw SmbException(
+                    NtStatus.STATUS_IO_TIMEOUT,
+                    "TCP connection to $host:$port timed out after $connectTimeout",
+                    e,
+                )
             } catch (e: Throwable) {
                 runCatching { socket?.close() }
                 runCatching { selectorManager.close() }

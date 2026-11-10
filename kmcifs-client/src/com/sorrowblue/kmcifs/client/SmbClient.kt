@@ -4,6 +4,7 @@ import com.sorrowblue.kmcifs.client.auth.NtlmAuthenticator
 import com.sorrowblue.kmcifs.client.auth.SmbCredentials
 import com.sorrowblue.kmcifs.client.crypto.Sha512
 import com.sorrowblue.kmcifs.client.crypto.Smb3Kdf
+import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readUIntLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readULongLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readUShortLE
 import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeULongLE
@@ -20,14 +21,26 @@ import com.sorrowblue.kmcifs.client.protocol.SmbMessages
 import com.sorrowblue.kmcifs.client.protocol.SmbPacketTransport
 import com.sorrowblue.kmcifs.client.protocol.SmbShareInfo
 import com.sorrowblue.kmcifs.client.protocol.SmbTransformHeader
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
- * Manages an SMB2/SMB3 client session over a single TCP connection.
+ * Manages an SMB2/SMB3 client session over a single TCP connection with asynchronous
+ * request pipelining and `MessageId`-based response demultiplexing.
  *
  * Connect to a server via [SmbClient.connect], enumerate shares with [listShares],
  * connect to a file share with [connectShare], or open the `IPC$` share for named pipe
@@ -38,10 +51,66 @@ class SmbClient internal constructor(
     val port: Int,
     val config: SmbConfig,
     private val transport: SmbPacketTransport,
+    private val readerDispatcher: CoroutineDispatcher = Dispatchers.Unconfined,
 ) : AutoCloseable {
 
-    private val mutex = Mutex()
+    private class CreditWaiter(
+        val needed: Int,
+        var granted: Boolean = false,
+        val deferred: CompletableDeferred<Unit> = CompletableDeferred(),
+    )
+
+    private sealed class PendingExchange(
+        val requireEncrypted: Boolean,
+        val requestTreeId: UInt,
+    ) {
+        var cancelled: Boolean = false
+        var deliveredEncrypted: Boolean = false
+        abstract val messageIds: List<ULong>
+        abstract fun fail(cause: Throwable)
+
+        class Single(
+            val messageId: ULong,
+            requireEncrypted: Boolean,
+            requestTreeId: UInt = 0u,
+        ) : PendingExchange(requireEncrypted, requestTreeId) {
+            val deferred = CompletableDeferred<ByteArray>()
+            var deliveredResponse: ByteArray? = null
+            override val messageIds: List<ULong> = listOf(messageId)
+            override fun fail(cause: Throwable) {
+                deferred.completeExceptionally(cause)
+            }
+        }
+
+        class Compound(
+            val expectedMessageIds: List<ULong>,
+            requireEncrypted: Boolean,
+            requestTreeId: UInt,
+            val closesHandleInCompound: Boolean,
+        ) : PendingExchange(requireEncrypted, requestTreeId) {
+            val deferred = CompletableDeferred<List<ByteArray>>()
+            val collected = HashMap<ULong, ByteArray>(expectedMessageIds.size)
+            var deliveredResponses: List<ByteArray>? = null
+            override val messageIds: List<ULong> = expectedMessageIds
+            override fun fail(cause: Throwable) {
+                deferred.completeExceptionally(cause)
+            }
+        }
+    }
+
+    private val sendMutex = Mutex()
+    private val stateMutex = Mutex()
+    private val clientJob = SupervisorJob()
+
     private var nextMessageId: ULong = 0uL
+    private var availableCredits: Int = 1
+    private var supportsMultiCredit: Boolean = false
+    private var inFlightSenders: Int = 0
+    private val creditWaiters = ArrayDeque<CreditWaiter>()
+    private val pendingExchanges = HashMap<ULong, PendingExchange>()
+    private var readerRunning: Boolean = false
+    private var echoProbeRunning: Boolean = false
+    private var connectionError: Throwable? = null
 
     @kotlin.concurrent.Volatile
     private var closed = false
@@ -82,7 +151,7 @@ class SmbClient internal constructor(
         var preauthHash = ByteArray(64)
 
         val negReq = SmbMessages.buildNegotiateRequest(
-            messageId = allocateMessageId(1u),
+            messageId = stateMutex.withLock { allocateMessageId(1u) },
             dialects = config.dialects,
             ciphers = config.ciphers,
         )
@@ -111,9 +180,9 @@ class SmbClient internal constructor(
         negotiatedDialect = negResp.dialect
         negotiatedCipher = negResp.negotiatedCipher
         serverSigningRequired = negResp.signingRequired
-        val maxAllowedMtu = if (negotiatedDialect == SmbDialect.SMB_2_0_2 ||
-            (negResp.capabilities and SmbMessages.SMB2_GLOBAL_CAP_LARGE_MTU) == 0u
-        ) {
+        supportsMultiCredit = negotiatedDialect != SmbDialect.SMB_2_0_2 &&
+            (negResp.capabilities and SmbMessages.SMB2_GLOBAL_CAP_LARGE_MTU) != 0u
+        val maxAllowedMtu = if (!supportsMultiCredit) {
             65536
         } else {
             8 * 1024 * 1024
@@ -136,12 +205,12 @@ class SmbClient internal constructor(
         }
 
         val setupReq1 = SmbMessages.buildSessionSetupRequest(
-            messageId = allocateMessageId(1u),
+            messageId = stateMutex.withLock { allocateMessageId(1u) },
             sessionId = 0uL,
             securityBuffer = spnegoInit,
             securityMode = secMode,
         )
-        if (negotiatedDialect == SmbDialect.SMB_2_0_2) {
+        if (!supportsMultiCredit) {
             setupReq1.writeUShortLE(6, 0u)
         }
         if (negotiatedDialect == SmbDialect.SMB_3_1_1) {
@@ -177,12 +246,12 @@ class SmbClient internal constructor(
         )
 
         val setupReq2 = SmbMessages.buildSessionSetupRequest(
-            messageId = allocateMessageId(1u),
+            messageId = stateMutex.withLock { allocateMessageId(1u) },
             sessionId = sessionId,
             securityBuffer = authResult.spnegoTokenResp,
             securityMode = secMode,
         )
-        if (negotiatedDialect == SmbDialect.SMB_2_0_2) {
+        if (!supportsMultiCredit) {
             setupReq2.writeUShortLE(6, 0u)
         }
         if (negotiatedDialect == SmbDialect.SMB_3_1_1) {
@@ -396,182 +465,593 @@ class SmbClient internal constructor(
         return id
     }
 
-    /**
-     * Sends an SMB command packet after session establishment and receives its response,
-     * automatically applying packet signing or SMB3 encryption and handling interim `STATUS_PENDING` responses.
-     *
-     * The send/receive transaction runs inside [NonCancellable] so that if the caller coroutine is cancelled
-     * mid-flight (e.g., during a media player seek or screen dismissal), no unread response remains in the
-     * TCP socket buffer to corrupt subsequent requests.
-     */
-    internal suspend fun executeCommand(plainRequest: ByteArray, forceEncrypt: Boolean = false): ByteArray {
-        return mutex.withLock {
-            withContext(NonCancellable) {
-                if (closed) {
-                    throw SmbException(NtStatus.STATUS_USER_SESSION_DELETED, "SMB client is already closed")
-                }
-                try {
-                    withTimeout(config.requestTimeoutMillis) {
-                        val credits = if (negotiatedDialect == SmbDialect.SMB_2_0_2) {
-                            plainRequest.writeUShortLE(6, 0u) // MS-SMB2 2.2.1.2: CreditCharge MUST be 0 in SMB 2.0.2
-                            1u
-                        } else {
-                            plainRequest.readUShortLE(6)
-                        }
-                        val expectedMessageId = allocateMessageId(credits)
-                        plainRequest.writeULongLE(24, expectedMessageId)
+    private fun prepareCreditCharge(packet: ByteArray): UShort {
+        return if (!supportsMultiCredit) {
+            // MS-SMB2 3.2.4.1.5: CreditCharge MUST be 0 when SupportsMultiCredit is FALSE
+            packet.writeUShortLE(6, 0u)
+            1u
+        } else {
+            val charge = packet.readUShortLE(6)
+            if (charge == 0u.toUShort()) 1u else charge
+        }
+    }
 
-                        val shouldEncrypt = (isSessionEncrypted || forceEncrypt) &&
-                            negotiatedDialect.isSmb3 &&
-                            negotiatedCipher != null &&
-                            encryptionKey != null
+    private fun computeCreditRequestLocked(consumedCredits: Int): UShort {
+        var queuedDemand = 0
+        for (waiter in creditWaiters) {
+            queuedDemand = (queuedDemand + waiter.needed).coerceAtMost(65535)
+        }
+        val deficit = (TARGET_CREDITS + queuedDemand - availableCredits).coerceAtLeast(consumedCredits)
+        return deficit.coerceIn(1, 65535).toUShort()
+    }
 
-                        val wirePacket = if (shouldEncrypt) {
-                            SmbTransformHeader.encryptPacket(
-                                plainSmbPacket = plainRequest,
-                                sessionId = sessionId,
-                                cipherId = negotiatedCipher!!,
-                                encryptionKey = encryptionKey!!,
-                            )
-                        } else {
-                            val key = signingKey
-                            val commandCode = plainRequest.readUShortLE(12)
-                            val mustSign = serverSigningRequired ||
-                                config.alwaysSign ||
-                                (negotiatedDialect.isSmb3 && commandCode == SmbCommand.TREE_CONNECT.code)
-                            if (key != null && !isGuestOrAnonymousSession && mustSign) {
-                                SmbHeader.signPacket(plainRequest, negotiatedDialect, key)
+    private fun grantCreditsLocked(granted: Int) {
+        if (granted > 0) {
+            availableCredits = (availableCredits + granted).coerceAtMost(65535)
+        }
+        if (availableCredits <= 0 && pendingExchanges.isEmpty() && inFlightSenders == 0) {
+            availableCredits = 1
+        }
+        while (creditWaiters.isNotEmpty() && availableCredits >= creditWaiters.first().needed) {
+            val waiter = creditWaiters.removeFirst()
+            availableCredits -= waiter.needed
+            waiter.granted = true
+            inFlightSenders++
+            waiter.deferred.complete(Unit)
+        }
+        ensureEchoCreditProbeLocked()
+    }
+
+    private fun ensureEchoCreditProbeLocked() {
+        if (closed || echoProbeRunning || pendingExchanges.isNotEmpty() || inFlightSenders > 0 || creditWaiters.isEmpty()) {
+            return
+        }
+        val headNeeded = creditWaiters.first().needed
+        if (availableCredits in 1 until headNeeded) {
+            echoProbeRunning = true
+            CoroutineScope(clientJob + readerDispatcher).launch {
+                runEchoCreditProbeLoop()
+            }
+        }
+    }
+
+    private suspend fun runEchoCreditProbeLoop() {
+        try {
+            while (true) {
+                val echoResp = withTimeout(config.requestTimeout) {
+                    val echoExchange = sendMutex.withLock {
+                        val shouldEncrypt = shouldEncryptPacket(forceEncrypt = false)
+                        val echoReq = SmbMessages.buildEchoRequest(sessionId = sessionId)
+                        val charge = prepareCreditCharge(echoReq)
+
+                        val created = stateMutex.withLock {
+                            if (closed || pendingExchanges.isNotEmpty() || inFlightSenders > 0 || creditWaiters.isEmpty()) {
+                                echoProbeRunning = false
+                                return@withLock null
                             }
-                            plainRequest
-                        }
+                            val headNeeded = creditWaiters.first().needed
+                            if (availableCredits !in 1..<headNeeded) {
+                                echoProbeRunning = false
+                                return@withLock null
+                            }
+                            availableCredits -= 1
+                            val msgId = allocateMessageId(charge)
+                            val creditReq = computeCreditRequestLocked(1)
+                            echoReq.writeUShortLE(14, creditReq)
+                            echoReq.writeULongLE(24, msgId)
+                            PendingExchange.Single(msgId, shouldEncrypt).also {
+                                pendingExchanges[msgId] = it
+                            }
+                        } ?: return@withLock null
 
+                        val wirePacket = wrapOutgoingSinglePacket(echoReq, shouldEncrypt)
                         transport.sendPacket(wirePacket)
-                        receiveAndUnwrapResponse(expectedMessageId, requireEncrypted = shouldEncrypt)
+                        ensureReaderRunning()
+                        created
+                    } ?: return@withTimeout null
+
+                    echoExchange.deferred.await()
+                } ?: return
+
+                val echoHeader = SmbHeader.decode(echoResp)
+                if (echoHeader.status != NtStatus.STATUS_SUCCESS) {
+                    throw SmbException(
+                        echoHeader.status,
+                        "SMB2 ECHO failed with ${NtStatus.nameOf(echoHeader.status)}",
+                    )
+                }
+                val echoGranted = echoHeader.creditRequestResponse.toInt()
+
+                val toFail = ArrayList<CreditWaiter>()
+                val capExceededCredits: Int
+                val keepProbing = stateMutex.withLock {
+                    if (closed || creditWaiters.isEmpty()) {
+                        echoProbeRunning = false
+                        capExceededCredits = 0
+                        false
+                    } else if (pendingExchanges.isNotEmpty() || inFlightSenders > 0) {
+                        echoProbeRunning = false
+                        capExceededCredits = 0
+                        false
+                    } else if (echoGranted <= 1 && availableCredits < creditWaiters.first().needed) {
+                        // Server refused to increase our credit balance; fail unachievable multi-credit waiters immediately
+                        capExceededCredits = availableCredits
+                        val iter = creditWaiters.iterator()
+                        while (iter.hasNext()) {
+                            val w = iter.next()
+                            if (w.needed > availableCredits) {
+                                iter.remove()
+                                toFail.add(w)
+                            }
+                        }
+                        while (creditWaiters.isNotEmpty() && availableCredits >= creditWaiters.first().needed) {
+                            val w = creditWaiters.removeFirst()
+                            availableCredits -= w.needed
+                            w.granted = true
+                            inFlightSenders++
+                            w.deferred.complete(Unit)
+                        }
+                        val moreNeeded = inFlightSenders == 0 &&
+                            creditWaiters.isNotEmpty() &&
+                            availableCredits in 1 until creditWaiters.first().needed
+                        if (!moreNeeded) echoProbeRunning = false
+                        moreNeeded
+                    } else {
+                        capExceededCredits = 0
+                        val moreNeeded = creditWaiters.isNotEmpty() && availableCredits in 1 until creditWaiters.first().needed
+                        if (!moreNeeded) echoProbeRunning = false
+                        moreNeeded
                     }
-                } catch (e: SmbException) {
-                    throw e
-                } catch (e: Throwable) {
-                    closed = true
-                    runCatching { transport.close() }
-                    throw e
+                }
+                if (toFail.isNotEmpty()) {
+                    val capEx = SmbException(
+                        NtStatus.STATUS_INSUFFICIENT_RESOURCES,
+                        "Server refused to grant required SMB2 credits (available: $capExceededCredits)",
+                    )
+                    for (w in toFail) {
+                        w.deferred.completeExceptionally(capEx)
+                    }
+                }
+                if (!keepProbing) return
+            }
+        } catch (e: TimeoutCancellationException) {
+            val timeoutEx = SmbException(
+                NtStatus.STATUS_IO_TIMEOUT,
+                "SMB2 ECHO credit probe timed out after ${config.requestTimeout}",
+                e,
+            )
+            failConnection(timeoutEx)
+        } catch (e: Throwable) {
+            failConnection(e)
+        }
+    }
+
+    private suspend fun acquireCredits(needed: Int) {
+        val waiter: CreditWaiter? = stateMutex.withLock {
+            if (closed) {
+                throw connectionError ?: SmbException(
+                    NtStatus.STATUS_USER_SESSION_DELETED,
+                    "SMB client is already closed",
+                )
+            }
+            if (creditWaiters.isEmpty() && availableCredits >= needed) {
+                availableCredits -= needed
+                inFlightSenders++
+                null
+            } else {
+                CreditWaiter(needed).also {
+                    creditWaiters.addLast(it)
+                    ensureEchoCreditProbeLocked()
                 }
             }
+        }
+        if (waiter != null) {
+            try {
+                waiter.deferred.await()
+            } catch (e: Throwable) {
+                withContext(NonCancellable) {
+                    stateMutex.withLock {
+                        val removed = creditWaiters.remove(waiter)
+                        if (waiter.granted) {
+                            waiter.granted = false
+                            inFlightSenders = (inFlightSenders - 1).coerceAtLeast(0)
+                            grantCreditsLocked(needed)
+                        } else if (removed) {
+                            grantCreditsLocked(0)
+                        }
+                    }
+                }
+                throw e
+            }
+        }
+    }
+
+    private suspend fun releaseCredits(amount: Int) {
+        stateMutex.withLock {
+            inFlightSenders = (inFlightSenders - 1).coerceAtLeast(0)
+            grantCreditsLocked(amount)
+        }
+    }
+
+    private fun shouldEncryptPacket(forceEncrypt: Boolean): Boolean {
+        return (isSessionEncrypted || forceEncrypt) &&
+            negotiatedDialect.isSmb3 &&
+            negotiatedCipher != null &&
+            encryptionKey != null
+    }
+
+    private fun wrapOutgoingSinglePacket(plainRequest: ByteArray, shouldEncrypt: Boolean): ByteArray {
+        return if (shouldEncrypt) {
+            SmbTransformHeader.encryptPacket(
+                plainSmbPacket = plainRequest,
+                sessionId = sessionId,
+                cipherId = negotiatedCipher!!,
+                encryptionKey = encryptionKey!!,
+            )
+        } else {
+            val key = signingKey
+            val commandCode = plainRequest.readUShortLE(12)
+            val mustSign = serverSigningRequired ||
+                config.alwaysSign ||
+                (negotiatedDialect.isSmb3 && commandCode == SmbCommand.TREE_CONNECT.code)
+            if (key != null && !isGuestOrAnonymousSession && mustSign) {
+                SmbHeader.signPacket(plainRequest, negotiatedDialect, key)
+            }
+            plainRequest
+        }
+    }
+
+    /**
+     * Sends an SMB command packet asynchronously onto the pipelined TCP connection and awaits its
+     * demultiplexed response matched by `MessageId`, automatically applying SMB2 credit flow control,
+     * packet signing or SMB3 encryption, and interim `STATUS_PENDING` handling.
+     */
+    internal suspend fun executeCommand(
+        plainRequest: ByteArray,
+        forceEncrypt: Boolean = false,
+        cancellable: Boolean = true,
+    ): ByteArray {
+        if (!cancellable) {
+            return withContext(NonCancellable) {
+                executeCommandInternal(plainRequest, forceEncrypt, cancellable = false)
+            }
+        }
+        return executeCommandInternal(plainRequest, forceEncrypt, cancellable = true)
+    }
+
+    private suspend fun executeCommandInternal(
+        plainRequest: ByteArray,
+        forceEncrypt: Boolean,
+        cancellable: Boolean,
+    ): ByteArray {
+        if (cancellable) {
+            currentCoroutineContext().ensureActive()
+        }
+        if (closed) {
+            throw SmbException(NtStatus.STATUS_USER_SESSION_DELETED, "SMB client is already closed")
+        }
+        val callerContext = currentCoroutineContext()
+        return try {
+            withTimeout(config.requestTimeout) {
+                val credits = prepareCreditCharge(plainRequest)
+                acquireCredits(credits.toInt())
+
+                var registered = false
+                val exchange = try {
+                    withContext(NonCancellable) {
+                        sendMutex.withLock {
+                            val shouldEncrypt = shouldEncryptPacket(forceEncrypt)
+                            val reqTreeId = plainRequest.readUIntLE(36)
+                            val single = stateMutex.withLock {
+                                if (cancellable && !callerContext.isActive) {
+                                    throw CancellationException("SMB request cancelled before send")
+                                }
+                                if (closed) {
+                                    throw connectionError ?: SmbException(
+                                        NtStatus.STATUS_USER_SESSION_DELETED,
+                                        "SMB client is already closed",
+                                    )
+                                }
+                                val expectedMessageId = allocateMessageId(credits)
+                                val creditReq = computeCreditRequestLocked(credits.toInt())
+                                plainRequest.writeUShortLE(14, creditReq)
+                                plainRequest.writeULongLE(24, expectedMessageId)
+                                PendingExchange.Single(expectedMessageId, shouldEncrypt, reqTreeId).also {
+                                    pendingExchanges[expectedMessageId] = it
+                                    inFlightSenders = (inFlightSenders - 1).coerceAtLeast(0)
+                                    registered = true
+                                }
+                            }
+
+                            val wirePacket = wrapOutgoingSinglePacket(plainRequest, shouldEncrypt)
+                            transport.sendPacket(wirePacket)
+                            ensureReaderRunning()
+                            single
+                        }
+                    }
+                } catch (e: Throwable) {
+                    if (!registered) {
+                        withContext(NonCancellable) {
+                            releaseCredits(credits.toInt())
+                        }
+                    }
+                    throw e
+                }
+
+                try {
+                    exchange.deferred.await()
+                } catch (cancelEx: CancellationException) {
+                    var lateDelivered: ByteArray? = null
+                    var lateEncrypted = false
+                    withContext(NonCancellable) {
+                        stateMutex.withLock {
+                            exchange.cancelled = true
+                            lateDelivered = exchange.deliveredResponse
+                            lateEncrypted = exchange.deliveredEncrypted
+                            exchange.deliveredResponse = null
+                        }
+                    }
+                    val orphanResp = lateDelivered
+                    if (orphanResp != null) {
+                        val hdr = runCatching { SmbHeader.decode(orphanResp) }.getOrNull()
+                        if (hdr != null) {
+                            cleanupOrphanedSingleResponse(orphanResp, hdr, exchange.requestTreeId, lateEncrypted)
+                        }
+                    }
+                    throw cancelEx
+                }
+            }
+        } catch (e: SmbException) {
+            throw e
+        } catch (e: TimeoutCancellationException) {
+            if (cancellable && !callerContext.isActive) {
+                throw e
+            }
+            val timeoutEx = SmbException(
+                NtStatus.STATUS_IO_TIMEOUT,
+                "SMB request timed out after ${config.requestTimeout}",
+                e,
+            )
+            failConnection(timeoutEx)
+            throw timeoutEx
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            failConnection(e)
+            throw e
         }
     }
 
     /**
      * Sends multiple related SMB2 requests (such as `[CREATE, CLOSE]`) in a single Compounded Related packet
-     * and returns the corresponding response byte arrays in request order.
+     * onto the pipelined TCP connection and returns the corresponding response byte arrays in request order.
      */
     internal suspend fun executeCompoundCommands(
         plainRequests: List<ByteArray>,
         forceEncrypt: Boolean = false,
+        cancellable: Boolean = true,
     ): List<ByteArray> {
         require(plainRequests.isNotEmpty()) { "plainRequests must not be empty" }
         if (plainRequests.size == 1) {
-            return listOf(executeCommand(plainRequests[0], forceEncrypt))
+            return listOf(executeCommand(plainRequests[0], forceEncrypt, cancellable))
         }
-        return mutex.withLock {
-            withContext(NonCancellable) {
-                if (closed) {
-                    throw SmbException(NtStatus.STATUS_USER_SESSION_DELETED, "SMB client is already closed")
+        if (!cancellable) {
+            return withContext(NonCancellable) {
+                executeCompoundCommandsInternal(plainRequests, forceEncrypt, cancellable = false)
+            }
+        }
+        return executeCompoundCommandsInternal(plainRequests, forceEncrypt, cancellable = true)
+    }
+
+    private suspend fun executeCompoundCommandsInternal(
+        plainRequests: List<ByteArray>,
+        forceEncrypt: Boolean,
+        cancellable: Boolean,
+    ): List<ByteArray> {
+        if (cancellable) {
+            currentCoroutineContext().ensureActive()
+        }
+        if (closed) {
+            throw SmbException(NtStatus.STATUS_USER_SESSION_DELETED, "SMB client is already closed")
+        }
+        val callerContext = currentCoroutineContext()
+        return try {
+            withTimeout(config.requestTimeout) {
+                val partCredits = IntArray(plainRequests.size)
+                var totalCredits = 0
+                for (i in plainRequests.indices) {
+                    val c = prepareCreditCharge(plainRequests[i]).toInt()
+                    partCredits[i] = c
+                    totalCredits += c
                 }
-                try {
-                    withTimeout(config.requestTimeoutMillis) {
-                        val expectedMessageIds = plainRequests.map { req ->
-                            val credits = if (negotiatedDialect == SmbDialect.SMB_2_0_2) {
-                                req.writeUShortLE(6, 0u)
-                                1u
-                            } else {
-                                req.readUShortLE(6)
-                            }
-                            val msgId = allocateMessageId(credits)
-                            req.writeULongLE(24, msgId)
-                            msgId
-                        }
+                acquireCredits(totalCredits)
 
-                        val shouldEncrypt = (isSessionEncrypted || forceEncrypt) &&
-                            negotiatedDialect.isSmb3 &&
-                            negotiatedCipher != null &&
-                            encryptionKey != null
-
-                        val key = signingKey
-                        val signEach: ((ByteArray) -> Unit)? = if (!shouldEncrypt && key != null && !isGuestOrAnonymousSession) {
-                            { slice ->
-                                val commandCode = slice.readUShortLE(12)
-                                val mustSign = serverSigningRequired ||
-                                    config.alwaysSign ||
-                                    (negotiatedDialect.isSmb3 && commandCode == SmbCommand.TREE_CONNECT.code)
-                                if (mustSign) {
-                                    SmbHeader.signPacket(slice, negotiatedDialect, key)
+                var registered = false
+                val exchange = try {
+                    withContext(NonCancellable) {
+                        sendMutex.withLock {
+                            val shouldEncrypt = shouldEncryptPacket(forceEncrypt)
+                            val reqTreeId = plainRequests[0].readUIntLE(36)
+                            val closesHandle = plainRequests.last().readUShortLE(12) == SmbCommand.CLOSE.code
+                            val compound = stateMutex.withLock {
+                                if (cancellable && !callerContext.isActive) {
+                                    throw CancellationException("SMB compound request cancelled before send")
+                                }
+                                if (closed) {
+                                    throw connectionError ?: SmbException(
+                                        NtStatus.STATUS_USER_SESSION_DELETED,
+                                        "SMB client is already closed",
+                                    )
+                                }
+                                val expectedMessageIds = ArrayList<ULong>(plainRequests.size)
+                                for (i in plainRequests.indices) {
+                                    val req = plainRequests[i]
+                                    val c = partCredits[i]
+                                    val msgId = allocateMessageId(c.toUShort())
+                                    val creditReq = if (i == plainRequests.lastIndex) {
+                                        computeCreditRequestLocked(totalCredits)
+                                    } else {
+                                        c.coerceIn(1, 65535).toUShort()
+                                    }
+                                    req.writeUShortLE(14, creditReq)
+                                    req.writeULongLE(24, msgId)
+                                    expectedMessageIds.add(msgId)
+                                }
+                                PendingExchange.Compound(
+                                    expectedMessageIds = expectedMessageIds,
+                                    requireEncrypted = shouldEncrypt,
+                                    requestTreeId = reqTreeId,
+                                    closesHandleInCompound = closesHandle,
+                                ).also { ex ->
+                                    for (id in expectedMessageIds) {
+                                        pendingExchanges[id] = ex
+                                    }
+                                    inFlightSenders = (inFlightSenders - 1).coerceAtLeast(0)
+                                    registered = true
                                 }
                             }
-                        } else {
-                            null
-                        }
 
-                        val compoundPlain = SmbMessages.buildCompoundRelatedPacket(plainRequests, signEach)
-                        val wirePacket = if (shouldEncrypt) {
-                            SmbTransformHeader.encryptPacket(
-                                plainSmbPacket = compoundPlain,
-                                sessionId = sessionId,
-                                cipherId = negotiatedCipher!!,
-                                encryptionKey = encryptionKey!!,
-                            )
-                        } else {
-                            compoundPlain
-                        }
+                            val key = signingKey
+                            val signEach: ((ByteArray) -> Unit)? = if (!shouldEncrypt && key != null && !isGuestOrAnonymousSession) {
+                                { slice ->
+                                    val commandCode = slice.readUShortLE(12)
+                                    val mustSign = serverSigningRequired ||
+                                        config.alwaysSign ||
+                                        (negotiatedDialect.isSmb3 && commandCode == SmbCommand.TREE_CONNECT.code)
+                                    if (mustSign) {
+                                        SmbHeader.signPacket(slice, negotiatedDialect, key)
+                                    }
+                                }
+                            } else {
+                                null
+                            }
 
-                        transport.sendPacket(wirePacket)
-                        receiveAndUnwrapCompoundResponses(expectedMessageIds, requireEncrypted = shouldEncrypt)
+                            val compoundPlain = SmbMessages.buildCompoundRelatedPacket(plainRequests, signEach)
+                            val wirePacket = if (shouldEncrypt) {
+                                SmbTransformHeader.encryptPacket(
+                                    plainSmbPacket = compoundPlain,
+                                    sessionId = sessionId,
+                                    cipherId = negotiatedCipher!!,
+                                    encryptionKey = encryptionKey!!,
+                                )
+                            } else {
+                                compoundPlain
+                            }
+
+                            transport.sendPacket(wirePacket)
+                            ensureReaderRunning()
+                            compound
+                        }
                     }
-                } catch (e: SmbException) {
-                    throw e
                 } catch (e: Throwable) {
-                    closed = true
-                    runCatching { transport.close() }
+                    if (!registered) {
+                        withContext(NonCancellable) {
+                            releaseCredits(totalCredits)
+                        }
+                    }
                     throw e
                 }
+
+                try {
+                    exchange.deferred.await()
+                } catch (cancelEx: CancellationException) {
+                    var lateDelivered: List<ByteArray>? = null
+                    var lateEncrypted = false
+                    withContext(NonCancellable) {
+                        stateMutex.withLock {
+                            exchange.cancelled = true
+                            lateDelivered = exchange.deliveredResponses
+                            lateEncrypted = exchange.deliveredEncrypted
+                            exchange.deliveredResponses = null
+                        }
+                    }
+                    val orphanResps = lateDelivered
+                    if (orphanResps != null) {
+                        cleanupOrphanedCompoundResponses(
+                            responses = orphanResps,
+                            closesHandleInCompound = exchange.closesHandleInCompound,
+                            requestTreeId = exchange.requestTreeId,
+                            wasEncrypted = lateEncrypted,
+                        )
+                    }
+                    throw cancelEx
+                }
             }
+        } catch (e: SmbException) {
+            throw e
+        } catch (e: TimeoutCancellationException) {
+            if (cancellable && !callerContext.isActive) {
+                throw e
+            }
+            val timeoutEx = SmbException(
+                NtStatus.STATUS_IO_TIMEOUT,
+                "SMB compound request timed out after ${config.requestTimeout}",
+                e,
+            )
+            failConnection(timeoutEx)
+            throw timeoutEx
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            failConnection(e)
+            throw e
         }
     }
 
     private suspend fun sendAndReceiveRaw(rawRequest: ByteArray): ByteArray {
+        currentCoroutineContext().ensureActive()
+        val callerContext = currentCoroutineContext()
         val expectedMessageId = rawRequest.readULongLE(24)
-        return mutex.withLock {
-            withContext(NonCancellable) {
-                if (closed) {
-                    throw SmbException(NtStatus.STATUS_USER_SESSION_DELETED, "SMB client is already closed")
-                }
-                try {
-                    withTimeout(config.requestTimeoutMillis) {
+        return sendMutex.withLock {
+            if (closed) {
+                throw SmbException(NtStatus.STATUS_USER_SESSION_DELETED, "SMB client is already closed")
+            }
+            try {
+                withTimeout(config.requestTimeout) {
+                    withContext(NonCancellable) {
+                        stateMutex.withLock {
+                            availableCredits = (availableCredits - 1).coerceAtLeast(0)
+                        }
                         transport.sendPacket(rawRequest)
-                        receiveAndUnwrapResponse(expectedMessageId)
                     }
-                } catch (e: SmbException) {
-                    throw e
-                } catch (e: Throwable) {
-                    closed = true
-                    runCatching { transport.close() }
+                    val resp = receiveHandshakeResponse(expectedMessageId)
+                    val respHeader = SmbHeader.decode(resp)
+                    stateMutex.withLock {
+                        availableCredits = maxOf(
+                            1,
+                            (availableCredits + respHeader.creditRequestResponse.toInt()).coerceAtMost(65535),
+                        )
+                    }
+                    resp
+                }
+            } catch (e: SmbException) {
+                throw e
+            } catch (e: TimeoutCancellationException) {
+                if (!callerContext.isActive) {
+                    failConnection(e)
                     throw e
                 }
+                val timeoutEx = SmbException(
+                    NtStatus.STATUS_IO_TIMEOUT,
+                    "SMB session handshake timed out after ${config.requestTimeout}",
+                    e,
+                )
+                failConnection(timeoutEx)
+                throw timeoutEx
+            } catch (e: CancellationException) {
+                failConnection(e)
+                throw e
+            } catch (e: Throwable) {
+                failConnection(e)
+                throw e
             }
         }
     }
 
-    private suspend fun receiveAndUnwrapResponse(
-        expectedMessageId: ULong,
-        requireEncrypted: Boolean = false,
-    ): ByteArray {
+    private suspend fun receiveHandshakeResponse(expectedMessageId: ULong): ByteArray {
         while (true) {
             val rawIncoming = transport.receivePacket()
             val wasEncrypted = SmbTransformHeader.isTransformPacket(rawIncoming)
-            if (requireEncrypted && !wasEncrypted) {
-                throw SmbException(
-                    NtStatus.STATUS_ACCESS_DENIED,
-                    "Expected encrypted SMB3 Transform response, but received unencrypted packet"
-                )
-            }
             val plainResponse = if (wasEncrypted) {
                 val cipher = negotiatedCipher
                     ?: throw IllegalStateException("Received encrypted SMB3 Transform packet before cipher was negotiated")
@@ -583,15 +1063,15 @@ class SmbClient internal constructor(
             }
 
             val header = SmbHeader.decode(plainResponse)
-            // Skip unsolicited server notifications (e.g., OPLOCK_BREAK with MessageId == 0xFFFFFFFFFFFFFFFF)
             if (!header.isResponse || header.messageId == ULong.MAX_VALUE) {
                 continue
             }
-            // Skip interim STATUS_PENDING async responses and wait for the final response
             if (header.status == NtStatus.STATUS_PENDING && header.isAsync) {
+                stateMutex.withLock {
+                    availableCredits = (availableCredits + header.creditRequestResponse.toInt()).coerceAtMost(65535)
+                }
                 continue
             }
-            // Skip any stale response packet with an older MessageId
             if (header.messageId < expectedMessageId) {
                 continue
             }
@@ -601,77 +1081,276 @@ class SmbClient internal constructor(
                     "Unexpected SMB2 response MessageId: expected $expectedMessageId, got ${header.messageId}"
                 )
             }
-
-            verifyIncomingPacketSignatureIfRequired(plainResponse, header, wasEncrypted)
-
             return plainResponse
         }
     }
 
-    private suspend fun receiveAndUnwrapCompoundResponses(
-        expectedMessageIds: List<ULong>,
-        requireEncrypted: Boolean = false,
-    ): List<ByteArray> {
-        val expectedSet = expectedMessageIds.toHashSet()
-        val collected = HashMap<ULong, ByteArray>(expectedMessageIds.size)
-        val minExpectedId = expectedMessageIds.min()
-
-        while (collected.size < expectedSet.size) {
-            val rawIncoming = transport.receivePacket()
-            val wasEncrypted = SmbTransformHeader.isTransformPacket(rawIncoming)
-            if (requireEncrypted && !wasEncrypted) {
-                throw SmbException(
-                    NtStatus.STATUS_ACCESS_DENIED,
-                    "Expected encrypted SMB3 Transform response, but received unencrypted packet"
-                )
+    private suspend fun ensureReaderRunning() {
+        stateMutex.withLock {
+            if (closed || pendingExchanges.isEmpty() || readerRunning) return
+            readerRunning = true
+            CoroutineScope(clientJob + readerDispatcher).launch {
+                runReaderLoop()
             }
-            val plainResponse = if (wasEncrypted) {
-                val cipher = negotiatedCipher
-                    ?: throw IllegalStateException("Received encrypted SMB3 Transform packet before cipher was negotiated")
-                val decKey = decryptionKey
-                    ?: throw IllegalStateException("Received encrypted SMB3 Transform packet without decryption key")
-                SmbTransformHeader.decryptPacket(rawIncoming, cipher, decKey, sessionId)
-            } else {
-                rawIncoming
+        }
+    }
+
+    private suspend fun runReaderLoop() {
+        try {
+            while (true) {
+                val keepReading = stateMutex.withLock {
+                    if (closed || pendingExchanges.isEmpty()) {
+                        readerRunning = false
+                        false
+                    } else {
+                        true
+                    }
+                }
+                if (!keepReading) return
+
+                val rawIncoming = transport.receivePacket()
+                dispatchIncomingPacket(rawIncoming)
+            }
+        } catch (e: Throwable) {
+            failConnection(e)
+        }
+    }
+
+    private suspend fun dispatchIncomingPacket(rawIncoming: ByteArray) {
+        val wasEncrypted = SmbTransformHeader.isTransformPacket(rawIncoming)
+        val plainResponse = if (wasEncrypted) {
+            val cipher = negotiatedCipher
+                ?: throw IllegalStateException("Received encrypted SMB3 Transform packet before cipher was negotiated")
+            val decKey = decryptionKey
+                ?: throw IllegalStateException("Received encrypted SMB3 Transform packet without decryption key")
+            SmbTransformHeader.decryptPacket(rawIncoming, cipher, decKey, sessionId)
+        } else {
+            rawIncoming
+        }
+
+        val parts = SmbMessages.splitCompoundPacket(plainResponse)
+        for ((partIndex, part) in parts.withIndex()) {
+            val header = SmbHeader.decode(part)
+            // Skip unsolicited server notifications (e.g., OPLOCK_BREAK with MessageId == 0xFFFFFFFFFFFFFFFF)
+            if (!header.isResponse || header.messageId == ULong.MAX_VALUE) {
+                if (header.creditRequestResponse > 0u) {
+                    stateMutex.withLock {
+                        grantCreditsLocked(header.creditRequestResponse.toInt())
+                    }
+                }
+                continue
             }
 
-            val parts = SmbMessages.splitCompoundPacket(plainResponse)
-            for (part in parts) {
-                val header = SmbHeader.decode(part)
-                if (!header.isResponse || header.messageId == ULong.MAX_VALUE) {
-                    continue
+            // Interim STATUS_PENDING async responses grant credits while keeping the exchange pending
+            if (header.status == NtStatus.STATUS_PENDING && header.isAsync) {
+                stateMutex.withLock {
+                    grantCreditsLocked(header.creditRequestResponse.toInt())
                 }
-                if (header.status == NtStatus.STATUS_PENDING && header.isAsync) {
-                    continue
-                }
-                if (header.messageId < minExpectedId) {
-                    continue
-                }
-                if (header.messageId !in expectedSet) {
+                continue
+            }
+
+            val exchange = stateMutex.withLock {
+                val found = pendingExchanges[header.messageId]
+                if (found == null && header.messageId >= nextMessageId) {
+                    grantCreditsLocked(header.creditRequestResponse.toInt())
                     throw SmbException(
                         NtStatus.STATUS_INVALID_NETWORK_RESPONSE,
-                        "Unexpected SMB2 response MessageId in compound response: ${header.messageId}"
+                        "Unexpected SMB2 response MessageId: ${header.messageId}",
                     )
                 }
-                verifyIncomingPacketSignatureIfRequired(part, header, wasEncrypted)
-                collected[header.messageId] = part
+                if (found == null) {
+                    grantCreditsLocked(header.creditRequestResponse.toInt())
+                }
+                found
+            } ?: continue
 
-                // いずれかのコマンドがエラー終了し、サーバーが後続の関連レスポンスを省略した場合は残りを埋めて即座に終了する
-                if (part === parts.last() &&
-                    header.status != NtStatus.STATUS_SUCCESS &&
-                    collected.size < expectedSet.size
-                ) {
-                    for (id in expectedMessageIds) {
-                        if (id !in collected) {
-                            collected[id] = part
+            if (exchange.requireEncrypted && !wasEncrypted) {
+                val encEx = SmbException(
+                    NtStatus.STATUS_ACCESS_DENIED,
+                    "Expected encrypted SMB3 Transform response, but received unencrypted packet",
+                )
+                stateMutex.withLock {
+                    for (id in exchange.messageIds) {
+                        pendingExchanges.remove(id)
+                    }
+                    grantCreditsLocked(header.creditRequestResponse.toInt())
+                }
+                exchange.fail(encEx)
+                continue
+            }
+
+            try {
+                verifyIncomingPacketSignatureIfRequired(part, header, wasEncrypted)
+            } catch (sigEx: SmbException) {
+                stateMutex.withLock {
+                    for (id in exchange.messageIds) {
+                        pendingExchanges.remove(id)
+                    }
+                    grantCreditsLocked(header.creditRequestResponse.toInt())
+                }
+                exchange.fail(sigEx)
+                continue
+            }
+
+            when (exchange) {
+                is PendingExchange.Single -> {
+                    val isCancelled = stateMutex.withLock {
+                        pendingExchanges.remove(exchange.messageId)
+                        grantCreditsLocked(header.creditRequestResponse.toInt())
+                        if (!exchange.cancelled) {
+                            exchange.deliveredResponse = part
+                            exchange.deliveredEncrypted = wasEncrypted
+                        }
+                        exchange.cancelled
+                    }
+                    if (isCancelled) {
+                        cleanupOrphanedSingleResponse(part, header, exchange.requestTreeId, wasEncrypted)
+                    } else {
+                        exchange.deferred.complete(part)
+                    }
+                }
+
+                is PendingExchange.Compound -> {
+                    var completedList: List<ByteArray>? = null
+                    var isCancelled = false
+                    stateMutex.withLock {
+                        exchange.collected[header.messageId] = part
+                        val isNtError = (header.status and 0xC0000000u) == 0xC0000000u
+                        // 先頭コマンド（CREATE）がエラー終了し、サーバーが後続の関連レスポンスを省略した場合のみ未受信分を補完する
+                        if (partIndex == parts.lastIndex &&
+                            isNtError &&
+                            header.messageId == exchange.expectedMessageIds.first() &&
+                            exchange.collected.size < exchange.expectedMessageIds.size
+                        ) {
+                            for (id in exchange.expectedMessageIds) {
+                                if (id !in exchange.collected) {
+                                    exchange.collected[id] = part
+                                }
+                            }
+                        }
+                        if (exchange.collected.size >= exchange.expectedMessageIds.size) {
+                            for (id in exchange.expectedMessageIds) {
+                                pendingExchanges.remove(id)
+                            }
+                            val list = exchange.expectedMessageIds.map { exchange.collected.getValue(it) }
+                            completedList = list
+                            isCancelled = exchange.cancelled
+                            if (!isCancelled) {
+                                exchange.deliveredResponses = list
+                                exchange.deliveredEncrypted = wasEncrypted
+                            }
+                        }
+                        grantCreditsLocked(header.creditRequestResponse.toInt())
+                    }
+                    val done = completedList
+                    if (done != null) {
+                        if (isCancelled) {
+                            cleanupOrphanedCompoundResponses(
+                                responses = done,
+                                closesHandleInCompound = exchange.closesHandleInCompound,
+                                requestTreeId = exchange.requestTreeId,
+                                wasEncrypted = wasEncrypted,
+                            )
+                        } else {
+                            exchange.deferred.complete(done)
                         }
                     }
-                    break
                 }
             }
         }
+    }
 
-        return expectedMessageIds.map { collected.getValue(it) }
+    private fun cleanupOrphanedSingleResponse(
+        respPacket: ByteArray,
+        header: SmbHeader,
+        requestTreeId: UInt,
+        wasEncrypted: Boolean,
+    ) {
+        if (header.status != NtStatus.STATUS_SUCCESS) return
+        when (header.command) {
+            SmbCommand.CREATE -> {
+                closeOrphanedCreateHandleAsync(respPacket, requestTreeId, wasEncrypted)
+            }
+            SmbCommand.TREE_CONNECT -> {
+                val treeResp = runCatching { SmbMessages.parseTreeConnectResponse(respPacket) }.getOrNull() ?: return
+                val forceEncrypt = wasEncrypted ||
+                    (config.encryptionPolicy != SmbEncryptionPolicy.DISABLED && treeResp.encryptData)
+                val discReq = SmbMessages.buildTreeDisconnectRequest(
+                    sessionId = sessionId,
+                    treeId = treeResp.treeId,
+                )
+                CoroutineScope(clientJob + readerDispatcher).launch {
+                    runCatching {
+                        executeCommand(discReq, forceEncrypt = forceEncrypt, cancellable = false)
+                    }
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun cleanupOrphanedCompoundResponses(
+        responses: List<ByteArray>,
+        closesHandleInCompound: Boolean,
+        requestTreeId: UInt,
+        wasEncrypted: Boolean,
+    ) {
+        if (responses.isEmpty()) return
+        val firstHdr = runCatching { SmbHeader.decode(responses[0]) }.getOrNull() ?: return
+        if (firstHdr.command != SmbCommand.CREATE || firstHdr.status != NtStatus.STATUS_SUCCESS) return
+        val closedInCompound = closesHandleInCompound &&
+            responses.size >= 2 &&
+            runCatching {
+                val lastHdr = SmbHeader.decode(responses.last())
+                lastHdr.command == SmbCommand.CLOSE && lastHdr.status == NtStatus.STATUS_SUCCESS
+            }.getOrDefault(false)
+        if (!closedInCompound) {
+            closeOrphanedCreateHandleAsync(responses[0], requestTreeId, wasEncrypted)
+        }
+    }
+
+    private fun closeOrphanedCreateHandleAsync(
+        createRespPacket: ByteArray,
+        treeId: UInt,
+        wasEncrypted: Boolean,
+    ) {
+        val createResp = runCatching { SmbMessages.parseCreateResponse(createRespPacket) }.getOrNull() ?: return
+        val closeReq = SmbMessages.buildCloseRequest(
+            sessionId = sessionId,
+            treeId = treeId,
+            fileId = createResp.fileId,
+        )
+        CoroutineScope(clientJob + readerDispatcher).launch {
+            runCatching {
+                executeCommand(closeReq, forceEncrypt = wasEncrypted, cancellable = false)
+            }
+        }
+    }
+
+    private suspend fun failConnection(cause: Throwable) = withContext(NonCancellable) {
+        closed = true
+        runCatching { transport.close() }
+        val toFailExchanges = ArrayList<PendingExchange>()
+        val toFailWaiters = ArrayList<CreditWaiter>()
+        val failure = stateMutex.withLock {
+            readerRunning = false
+            echoProbeRunning = false
+            inFlightSenders = 0
+            val recorded = connectionError ?: cause.also { connectionError = it }
+            val unique = LinkedHashSet(pendingExchanges.values)
+            toFailExchanges.addAll(unique)
+            pendingExchanges.clear()
+            toFailWaiters.addAll(creditWaiters)
+            creditWaiters.clear()
+            recorded
+        }
+        clientJob.cancel()
+        for (ex in toFailExchanges) {
+            ex.fail(failure)
+        }
+        for (w in toFailWaiters) {
+            w.deferred.completeExceptionally(failure)
+        }
     }
 
     /**
@@ -722,21 +1401,26 @@ class SmbClient internal constructor(
                     val req = SmbMessages.buildLogoffRequest(
                         sessionId = sessionId,
                     )
-                    executeCommand(req)
+                    executeCommand(req, cancellable = false)
                 }
             }
         } finally {
-            closed = true
-            transport.close()
+            failConnection(SmbException(NtStatus.STATUS_USER_SESSION_DELETED, "SMB client is already closed"))
         }
     }
 
     override fun close() {
         closed = true
-        transport.close()
+        runCatching { transport.close() }
+        clientJob.cancel()
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            failConnection(SmbException(NtStatus.STATUS_USER_SESSION_DELETED, "SMB client is already closed"))
+        }
     }
 
     companion object {
+        private const val TARGET_CREDITS = 128
+
         /**
          * Connects to the specified SMB server over TCP and completes dialect negotiation and NTLMv2 authentication.
          */
@@ -746,8 +1430,14 @@ class SmbClient internal constructor(
             credentials: SmbCredentials = SmbCredentials.Anonymous,
             config: SmbConfig = SmbConfig(),
         ): SmbClient {
-            val transport = KtorTcpSmbTransport.connect(host, port, config.connectTimeoutMillis)
-            val client = SmbClient(host, port, config, transport)
+            val transport = KtorTcpSmbTransport.connect(host, port, config.connectTimeout)
+            val client = SmbClient(
+                host = host,
+                port = port,
+                config = config,
+                transport = transport,
+                readerDispatcher = KtorTcpSmbTransport.transportDispatcher,
+            )
             try {
                 client.initializeSession(credentials)
                 return client
