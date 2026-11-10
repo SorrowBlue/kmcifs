@@ -3,6 +3,7 @@ package com.sorrowblue.kmcifs.client
 import com.sorrowblue.kmcifs.client.protocol.SmbCipherId
 import com.sorrowblue.kmcifs.client.protocol.SmbDialect
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -68,4 +69,68 @@ data class SmbConfig(
         require(connectTimeout.isPositive()) { "connectTimeout must be positive: $connectTimeout" }
         require(requestTimeout.isPositive()) { "requestTimeout must be positive: $requestTimeout" }
     }
+
+    /**
+     * TCP socket connection timeout in milliseconds.
+     */
+    @Deprecated(
+        message = "Use connectTimeout instead.",
+        replaceWith = ReplaceWith("connectTimeout.inWholeMilliseconds"),
+    )
+    val connectTimeoutMillis: Long
+        get() = connectTimeout.inWholeMilliseconds
+
+    /**
+     * Timeout in milliseconds for each SMB request/response exchange.
+     */
+    @Deprecated(
+        message = "Use requestTimeout instead.",
+        replaceWith = ReplaceWith("requestTimeout.inWholeMilliseconds"),
+    )
+    val requestTimeoutMillis: Long
+        get() = requestTimeout.inWholeMilliseconds
+
+    /**
+     * Creates an [SmbConfig] specifying [connectTimeoutMillis] (and optionally [requestTimeoutMillis]) in milliseconds.
+     */
+    @Deprecated(
+        message = "Use Duration-based connectTimeout and requestTimeout instead.",
+        replaceWith = ReplaceWith(
+            "SmbConfig(dialects, ciphers, encryptionPolicy, preferEncryption, alwaysSign, verifyServerSignatures, queryDirectoryBufferSize, randomAccessBufferSize, connectTimeoutMillis.milliseconds, requestTimeoutMillis.milliseconds)",
+            "kotlin.time.Duration.Companion.milliseconds",
+        ),
+    )
+    constructor(
+        dialects: List<SmbDialect> = listOf(
+            SmbDialect.SMB_3_1_1,
+            SmbDialect.SMB_3_0_2,
+            SmbDialect.SMB_3_0_0,
+            SmbDialect.SMB_2_1_0,
+            SmbDialect.SMB_2_0_2,
+        ),
+        ciphers: List<SmbCipherId> = listOf(
+            SmbCipherId.AES_128_GCM,
+            SmbCipherId.AES_128_CCM,
+        ),
+        encryptionPolicy: SmbEncryptionPolicy = SmbEncryptionPolicy.NEGOTIATE,
+        preferEncryption: Boolean = false,
+        alwaysSign: Boolean = false,
+        verifyServerSignatures: Boolean = true,
+        queryDirectoryBufferSize: Int = 64 * 1024,
+        randomAccessBufferSize: Int = SmbRandomAccessFile.DEFAULT_BUFFER_SIZE,
+        connectTimeoutMillis: Long = 10_000L,
+        requestTimeoutMillis: Long = 30_000L,
+        deprecatedMarker: Unit = Unit,
+    ) : this(
+        dialects = dialects,
+        ciphers = ciphers,
+        encryptionPolicy = encryptionPolicy,
+        preferEncryption = preferEncryption,
+        alwaysSign = alwaysSign,
+        verifyServerSignatures = verifyServerSignatures,
+        queryDirectoryBufferSize = queryDirectoryBufferSize,
+        randomAccessBufferSize = randomAccessBufferSize,
+        connectTimeout = connectTimeoutMillis.milliseconds,
+        requestTimeout = requestTimeoutMillis.milliseconds,
+    )
 }

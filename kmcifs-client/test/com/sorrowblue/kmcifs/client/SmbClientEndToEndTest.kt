@@ -1628,6 +1628,26 @@ class SmbClientEndToEndTest {
                     runCatching { badServer.close() }
                     runCatching { badSelector.close() }
                 }
+
+                // 9. Verify deprecated Long-based SmbConfig constructors and properties
+                @Suppress("DEPRECATION")
+                val cfgConnectOnly = SmbConfig(connectTimeoutMillis = 5_000L)
+                assertEquals(5_000L, cfgConnectOnly.connectTimeout.inWholeMilliseconds)
+                assertEquals(30_000L, cfgConnectOnly.requestTimeout.inWholeMilliseconds)
+                @Suppress("DEPRECATION")
+                assertEquals(5_000L, cfgConnectOnly.connectTimeoutMillis)
+
+                @Suppress("DEPRECATION")
+                val cfgRequestOnly = SmbConfig(requestTimeoutMillis = 15_000L)
+                assertEquals(10_000L, cfgRequestOnly.connectTimeout.inWholeMilliseconds)
+                assertEquals(15_000L, cfgRequestOnly.requestTimeout.inWholeMilliseconds)
+                @Suppress("DEPRECATION")
+                assertEquals(15_000L, cfgRequestOnly.requestTimeoutMillis)
+
+                @Suppress("DEPRECATION")
+                val cfgBoth = SmbConfig(connectTimeoutMillis = 4_000L, requestTimeoutMillis = 12_000L)
+                assertEquals(4_000L, cfgBoth.connectTimeout.inWholeMilliseconds)
+                assertEquals(12_000L, cfgBoth.requestTimeout.inWholeMilliseconds)
             }
         }
     }
