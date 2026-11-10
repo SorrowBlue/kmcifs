@@ -80,18 +80,16 @@ runs:
               echo "~/.cache/JetBrains/Kotlin/download.cache"
               echo "~/.cache/JetBrains/Kotlin/extract.cache"
               echo "~/.konan"
-              echo "~/.gradle/wrapper"
-              echo "!~/.gradle/wrapper/**/*.lock"
+              echo "~/.gradle/wrapper/dists"
               echo "EOF"
               echo "deps_cache_path<<EOF"
-              echo "~/.cache/JetBrains/Kotlin"
-              echo "!~/.cache/JetBrains/Kotlin/cli"
-              echo "!~/.cache/JetBrains/Kotlin/download.cache"
-              echo "!~/.cache/JetBrains/Kotlin/extract.cache"
-              echo "!~/.cache/JetBrains/Kotlin/telemetry"
-              echo "~/.gradle/caches"
-              echo "!~/.gradle/caches/**/*.lock"
-              echo "!~/.gradle/caches/**/gc.properties"
+              echo "~/.cache/JetBrains/Kotlin/.m2.cache"
+              echo "~/.cache/JetBrains/Kotlin/kotlin"
+              echo "~/.gradle/caches/modules-*"
+              echo "~/.gradle/caches/jars-*"
+              echo "~/.gradle/caches/*/transforms"
+              echo "~/.gradle/caches/*/generated-gradle-jars"
+              echo "~/.gradle/caches/*/kotlin-dsl"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
             ;;
@@ -104,11 +102,8 @@ runs:
               echo "~/.konan"
               echo "EOF"
               echo "deps_cache_path<<EOF"
-              echo "~/Library/Caches/JetBrains/Kotlin"
-              echo "!~/Library/Caches/JetBrains/Kotlin/cli"
-              echo "!~/Library/Caches/JetBrains/Kotlin/download.cache"
-              echo "!~/Library/Caches/JetBrains/Kotlin/extract.cache"
-              echo "!~/Library/Caches/JetBrains/Kotlin/telemetry"
+              echo "~/Library/Caches/JetBrains/Kotlin/.m2.cache"
+              echo "~/Library/Caches/JetBrains/Kotlin/kotlin"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
             ;;
@@ -121,11 +116,8 @@ runs:
               echo "~/.konan"
               echo "EOF"
               echo "deps_cache_path<<EOF"
-              echo "~/AppData/Local/JetBrains/Kotlin"
-              echo "!~/AppData/Local/JetBrains/Kotlin/cli"
-              echo "!~/AppData/Local/JetBrains/Kotlin/download.cache"
-              echo "!~/AppData/Local/JetBrains/Kotlin/extract.cache"
-              echo "!~/AppData/Local/JetBrains/Kotlin/telemetry"
+              echo "~/AppData/Local/JetBrains/Kotlin/.m2.cache"
+              echo "~/AppData/Local/JetBrains/Kotlin/kotlin"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
             ;;
@@ -167,16 +159,16 @@ runs:
       uses: actions/cache@v6.1.0
       with:
         path: ${{ steps.meta.outputs.deps_cache_path }}
-        key: ${{ runner.os }}-kotlin-deps-v2-${{ github.job }}-${{ hashFiles('kotlin', 'kotlin.bat', 'libs.versions.toml') }}
+        key: ${{ runner.os }}-kotlin-deps-v3-${{ github.job }}-${{ hashFiles('kotlin', 'kotlin.bat', 'libs.versions.toml') }}
 
     - name: Restore Kotlin dependencies (read-only)
       if: inputs.cache == 'true' && steps.meta.outputs.cache_read_only == 'true'
       uses: actions/cache/restore@v6.1.0
       with:
         path: ${{ steps.meta.outputs.deps_cache_path }}
-        key: ${{ runner.os }}-kotlin-deps-v2-${{ github.job }}-${{ hashFiles('kotlin', 'kotlin.bat', 'libs.versions.toml') }}
+        key: ${{ runner.os }}-kotlin-deps-v3-${{ github.job }}-${{ hashFiles('kotlin', 'kotlin.bat', 'libs.versions.toml') }}
         restore-keys: |
-          ${{ runner.os }}-kotlin-deps-v2-${{ github.job }}-
-          ${{ runner.os }}-kotlin-deps-v2-build-${{ hashFiles('kotlin', 'kotlin.bat', 'libs.versions.toml') }}
-          ${{ runner.os }}-kotlin-deps-v2-build-
-          ${{ runner.os }}-kotlin-deps-v2-
+          ${{ runner.os }}-kotlin-deps-v3-${{ github.job }}-
+          ${{ runner.os }}-kotlin-deps-v3-build-${{ hashFiles('kotlin', 'kotlin.bat', 'libs.versions.toml') }}
+          ${{ runner.os }}-kotlin-deps-v3-build-
+          ${{ runner.os }}-kotlin-deps-v3-
