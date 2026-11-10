@@ -43,12 +43,15 @@ jobs:
         include:
           - name: Linux / JVM / Android
             os: ubuntu-latest
+            cache_read_only: "true"
             cmd: ./kotlin test -m kmcifs-client -m sample -p jvm -p android -p linuxX64
           - name: Windows (mingwX64)
             os: windows-latest
+            cache_read_only: ""
             cmd: ./kotlin.bat test -m kmcifs-client -m sample -p mingwX64
           - name: macOS / iOS
             os: macos-latest
+            cache_read_only: "true"
             cmd: ./kotlin test -m kmcifs-client -m sample -p macosArm64 -p iosSimulatorArm64
     steps:
       - name: Checkout repository
@@ -56,6 +59,8 @@ jobs:
 
       - name: Set up Kotlin Toolchain
         uses: $/.github/actions/setup-kotlin
+        with:
+          cache-read-only: ${{ matrix.cache_read_only }}
 
       - name: Run tests
         run: ${{ matrix.cmd }}
@@ -112,6 +117,8 @@ jobs:
       - name: Set up Kotlin Toolchain
         id: kotlin
         uses: $/.github/actions/setup-kotlin
+        with:
+          cache-read-only: "true"
 
       - name: Publish SNAPSHOT to Central Portal Snapshots
         env:

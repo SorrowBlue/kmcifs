@@ -132,6 +132,8 @@ jobs:
 
       - name: Set up Kotlin Toolchain
         uses: $/.github/actions/setup-kotlin
+        with:
+          cache-read-only: "true"
 
       - name: Build release targets and sample executables
         run: ${{ matrix.build_cmd }}
@@ -217,6 +219,8 @@ jobs:
 
       - name: Set up Kotlin Toolchain
         uses: $/.github/actions/setup-kotlin
+        with:
+          cache-read-only: "true"
 
       - name: Publish kmcifs-client to Maven Central
         env:
