@@ -6,3 +6,6 @@ product:
 
 dependencies:
   - //sample
+
+plugins:
+  detekt: enabled

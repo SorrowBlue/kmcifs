@@ -1,5 +1,7 @@
 [versions]
 androidx-activity = "1.13.0"
+compose-rules = "0.6.8"
+detekt = "2.0.0-alpha.6"
 dokka = "2.3.0"
 kotlinx-coroutines = "1.11.0"
 kotlinx-io = "0.9.3"
@@ -8,6 +10,14 @@ libvlc = "3.7.7"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+compose-rules-detekt = { module = "io.nlopez.compose.rules:detekt", version.ref = "compose-rules" }
+detekt-core = { module = "dev.detekt:detekt-core", version.ref = "detekt" }
+detekt-report-checkstyle = { module = "dev.detekt:detekt-report-checkstyle", version.ref = "detekt" }
+detekt-report-html = { module = "dev.detekt:detekt-report-html", version.ref = "detekt" }
+detekt-report-sarif = { module = "dev.detekt:detekt-report-sarif", version.ref = "detekt" }
+detekt-rules = { module = "dev.detekt:detekt-rules", version.ref = "detekt" }
+detekt-rules-ktlint-wrapper = { module = "dev.detekt:detekt-rules-ktlint-wrapper", version.ref = "detekt" }
+detekt-tooling = { module = "dev.detekt:detekt-tooling", version.ref = "detekt" }
 dokka-analysis-kotlin-symbols = { module = "org.jetbrains.dokka:analysis-kotlin-symbols", version.ref = "dokka" }
 dokka-base = { module = "org.jetbrains.dokka:dokka-base", version.ref = "dokka" }
 dokka-core = { module = "org.jetbrains.dokka:dokka-core", version.ref = "dokka" }

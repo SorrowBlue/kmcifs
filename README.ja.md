@@ -31,6 +31,9 @@ Kotlin Multiplatform 向けの SMB2 / SMB3 クライアント実装。ビルド�
 # 全モジュールのテスト実行
 ./kotlin test
 
+# 全モジュールの Detekt 静的解析
+./kotlin check detekt
+
 # Dokka HTML API リファレンスの生成 (build/dokka/html/kmcifs-client/index.html)
 ./kotlin do dokka
 

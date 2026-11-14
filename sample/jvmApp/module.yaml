@@ -6,3 +6,6 @@ dependencies:
 settings:
   jvm:
     release: 11
+
+plugins:
+  detekt: enabled

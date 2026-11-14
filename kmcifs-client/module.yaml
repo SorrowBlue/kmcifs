@@ -65,4 +65,5 @@ repositories:
       passwordKey: centralPassword
 
 plugins:
+  detekt: enabled
   dokka: enabled

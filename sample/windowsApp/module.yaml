@@ -2,3 +2,6 @@ product: windows/app
 
 dependencies:
   - //sample
+
+plugins:
+  detekt: enabled

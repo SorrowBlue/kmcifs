@@ -6,3 +6,6 @@ dependencies:
   - $libs.dokka.core
   - $libs.dokka.base
   - $libs.dokka.analysis.kotlin.symbols
+
+plugins:
+  detekt: enabled

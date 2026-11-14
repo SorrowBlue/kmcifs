@@ -1,5 +1,6 @@
 modules:
   - kmcifs-client
+  - plugins/detekt
   - plugins/dokka
   - sample
   - sample/androidApp
@@ -10,4 +11,5 @@ modules:
   - sample/windowsApp
 
 plugins:
+  - ./plugins/detekt
   - ./plugins/dokka

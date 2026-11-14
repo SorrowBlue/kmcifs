@@ -31,6 +31,9 @@ Use the bundled `kotlin` (Unix) or `kotlin.bat` (Windows) wrapper to build, run 
 # Run tests across all modules
 ./kotlin test
 
+# Run Detekt static analysis across all modules
+./kotlin check detekt
+
 # Generate Dokka HTML API reference (build/dokka/html/kmcifs-client/index.html)
 ./kotlin do dokka
 

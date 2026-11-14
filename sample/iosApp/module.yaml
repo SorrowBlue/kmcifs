@@ -9,3 +9,6 @@ dependencies:
 settings:
   compose:
     enabled: true
+
+plugins:
+  detekt: enabled
