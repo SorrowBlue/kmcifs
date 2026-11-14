@@ -15,6 +15,12 @@
 # サンプル共通モジュールの JVM テスト実行
 .\kotlin.bat test -m sample -p jvm
 
+# Detekt 静的解析（標準ルール + ktlint + Compose Rules）
+.\kotlin.bat check detekt
+
+# Detekt ベースラインの再生成
+.\kotlin.bat do detektBaseline
+
 # Dokka API リファレンス生成
 .\kotlin.bat do dokka
 ```
