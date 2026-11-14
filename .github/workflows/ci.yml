@@ -33,6 +33,22 @@ jobs:
           gh extension install github/gh-actions-lock
           gh actions-lock --verify-local
 
+  detekt:
+    name: Detekt
+    needs: verify-lock
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Kotlin Toolchain
+        uses: $/.github/actions/setup-kotlin
+        with:
+          cache-read-only: "true"
+
+      - name: Run Detekt
+        run: ./kotlin check detekt
+
   test:
     name: Test (${{ matrix.name }})
     needs: verify-lock
@@ -91,22 +107,23 @@ jobs:
 
   ci-success:
     name: CI Success
-    needs: [verify-lock, test, build]
+    needs: [verify-lock, detekt, test, build]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Verify all CI jobs succeeded
         run: |
           if [ "${{ needs.verify-lock.result }}" != "success" ] || \
+             [ "${{ needs.detekt.result }}" != "success" ] || \
              [ "${{ needs.test.result }}" != "success" ] || \
              [ "${{ needs.build.result }}" != "success" ]; then
-            echo "::error::One or more CI jobs failed or were cancelled (verify-lock=${{ needs.verify-lock.result }}, test=${{ needs.test.result }}, build=${{ needs.build.result }})."
+            echo "::error::One or more CI jobs failed or were cancelled (verify-lock=${{ needs.verify-lock.result }}, detekt=${{ needs.detekt.result }}, test=${{ needs.test.result }}, build=${{ needs.build.result }})."
             exit 1
           fi
 
   publish-snapshot:
     name: Publish SNAPSHOT to Maven Central
-    needs: [test, build]
+    needs: [detekt, test, build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: snapshot
