@@ -1,0 +1,355 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>ArgumentListWrapping:Aes.kt:Aes$(ciphertextOffset &gt;= 0 &amp;&amp; ciphertextLength &gt;= 0 &amp;&amp; ciphertextLength &lt;= ciphertext.size - ciphertextOffset)</ID>
+    <ID>ArgumentListWrapping:Aes.kt:Aes$(input, inputOffset + offset + 12)</ID>
+    <ID>ArgumentListWrapping:Aes.kt:Aes$(keystream, 12)</ID>
+    <ID>ArgumentListWrapping:Aes.kt:Aes$(output, offset + 12, readIntBE(input, inputOffset + offset + 12) xor readIntBE(keystream, 12))</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(a, b, c, d, x[0], 3)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(a, b, c, d, x[12], 3)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(a, b, c, d, x[1], 3)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(a, b, c, d, x[2], 3)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(a, b, c, d, x[3], 3)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(a, b, c, d, x[4], 3)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(a, b, c, d, x[8], 3)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[11], 19)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[12], 13)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[12], 15)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[13], 13)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[13], 15)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[14], 13)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[14], 15)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[15], 13)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[15], 15)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[15], 19)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[3], 19)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(b, c, d, a, x[7], 19)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(c, d, a, b, x[10], 11)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(c, d, a, b, x[10], 9)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(c, d, a, b, x[11], 9)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(c, d, a, b, x[14], 11)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(c, d, a, b, x[2], 11)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(c, d, a, b, x[4], 11)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(c, d, a, b, x[5], 11)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(c, d, a, b, x[6], 11)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(c, d, a, b, x[7], 11)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(c, d, a, b, x[8], 9)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(c, d, a, b, x[9], 9)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[10], 9)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[11], 9)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[13], 7)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[1], 7)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[4], 5)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[5], 5)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[5], 7)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[6], 5)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[7], 5)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[8], 9)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[9], 7)</ID>
+    <ID>ArgumentListWrapping:Md4.kt:Md4$(d, a, b, c, x[9], 9)</ID>
+    <ID>ArgumentListWrapping:NtStatus.kt:SmbException$(16)</ID>
+    <ID>ArgumentListWrapping:NtStatus.kt:SmbException$(8, '0')</ID>
+    <ID>ArgumentListWrapping:NtStatus.kt:SmbException$(ntStatus)</ID>
+    <ID>ArgumentListWrapping:NtlmAuthenticator.kt:NtlmAuthenticator$( 'N'.code.toByte(), 'T'.code.toByte(), 'L'.code.toByte(), 'M'.code.toByte(), 'S'.code.toByte(), 'S'.code.toByte(), 'P'.code.toByte(), 0x00 )</ID>
+    <ID>ArgumentListWrapping:SmbClient.kt:SmbClient$("Received encrypted SMB3 Transform packet before cipher was negotiated")</ID>
+    <ID>ArgumentListWrapping:SmbClient.kt:SmbClient$(setupResp2Raw, negotiatedDialect, key)</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$("127.0.0.1", 445, SmbConfig(encryptionPolicy = SmbEncryptionPolicy.REQUIRED), strippingTransport)</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$("192.168.1.10", 445, SmbConfig(encryptionPolicy = SmbEncryptionPolicy.DISABLED), mockTransport)</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$("data/primitives.bin", SmbRandomAccessMode.READ_WRITE_SYNC, bufferSize = 8)</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$(0, backend.openHandleCount(), "Orphaned CREATE handle from cancelled compound with failed CLOSE must be closed")</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$(0, backend.openHandleCount(), "raf.close() must close the SMB file handle even after callerJob cancellation")</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$(encryptionPolicy = SmbEncryptionPolicy.DISABLED)</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$(encryptionPolicy = SmbEncryptionPolicy.REQUIRED)</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$(handshakeErr is CancellationException, "Expected CancellationException on cancelled handshake, got $handshakeErr")</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$(mockTransport.encryptedPacketsCount &gt;= 10, "All post-auth packets should be encrypted via SMB3 Transform Header")</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$(path = "data/buffered.bin", mode = SmbRandomAccessMode.READ_WRITE_DSYNC, bufferSize = 8)</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$(SmbCommand.NEGOTIATE, SmbCommand.SESSION_SETUP)</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$(b + 4, if (encryptShare &amp;&amp; dialect.isSmb3) SmbMessages.SMB2_SHAREFLAG_ENCRYPT_DATA else 0u)</ID>
+    <ID>ArgumentListWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$(it)</ID>
+    <ID>ArgumentListWrapping:SmbFile.kt:SmbFile$(size &lt;= Int.MAX_VALUE)</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$((sbox[s0 ushr 24] shl 24) or (sbox[(s1 ushr 16) and 0xFF] shl 16) or (sbox[(s2 ushr 8) and 0xFF] shl 8) or sbox[s3 and 0xFF]) xor k[40]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$((sbox[s1 ushr 24] shl 24) or (sbox[(s2 ushr 16) and 0xFF] shl 16) or (sbox[(s3 ushr 8) and 0xFF] shl 8) or sbox[s0 and 0xFF]) xor k[41]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$((sbox[s2 ushr 24] shl 24) or (sbox[(s3 ushr 16) and 0xFF] shl 16) or (sbox[(s0 ushr 8) and 0xFF] shl 8) or sbox[s1 and 0xFF]) xor k[42]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$((sbox[s3 ushr 24] shl 24) or (sbox[(s0 ushr 16) and 0xFF] shl 16) or (sbox[(s1 ushr 8) and 0xFF] shl 8) or sbox[s2 and 0xFF]) xor k[43]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$(sbox[s0 ushr 24] shl 24) or (sbox[(s1 ushr 16) and 0xFF] shl 16) or (sbox[(s2 ushr 8) and 0xFF] shl 8)</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$(sbox[s0 ushr 24] shl 24) or (sbox[(s1 ushr 16) and 0xFF] shl 16) or (sbox[(s2 ushr 8) and 0xFF] shl 8) or sbox[s3 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$(sbox[s1 ushr 24] shl 24) or (sbox[(s2 ushr 16) and 0xFF] shl 16) or (sbox[(s3 ushr 8) and 0xFF] shl 8)</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$(sbox[s1 ushr 24] shl 24) or (sbox[(s2 ushr 16) and 0xFF] shl 16) or (sbox[(s3 ushr 8) and 0xFF] shl 8) or sbox[s0 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$(sbox[s2 ushr 24] shl 24) or (sbox[(s3 ushr 16) and 0xFF] shl 16) or (sbox[(s0 ushr 8) and 0xFF] shl 8)</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$(sbox[s2 ushr 24] shl 24) or (sbox[(s3 ushr 16) and 0xFF] shl 16) or (sbox[(s0 ushr 8) and 0xFF] shl 8) or sbox[s1 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$(sbox[s3 ushr 24] shl 24) or (sbox[(s0 ushr 16) and 0xFF] shl 16) or (sbox[(s1 ushr 8) and 0xFF] shl 8)</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$(sbox[s3 ushr 24] shl 24) or (sbox[(s0 ushr 16) and 0xFF] shl 16) or (sbox[(s1 ushr 8) and 0xFF] shl 8) or sbox[s2 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$kOff + 1</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$kOff + 2</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$kOff + 3</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$s0 and 0xFF</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$s1 and 0xFF</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$s2 and 0xFF</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$s3 and 0xFF</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$sbox[(s0 ushr 8) and 0xFF] shl 8</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$sbox[(s1 ushr 8) and 0xFF] shl 8</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$sbox[(s2 ushr 8) and 0xFF] shl 8</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$sbox[(s3 ushr 8) and 0xFF] shl 8</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$te0[s0 ushr 24] xor te1[(s1 ushr 16) and 0xFF] xor te2[(s2 ushr 8) and 0xFF] xor te3[s3 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$te0[s0 ushr 24] xor te1[(s1 ushr 16) and 0xFF] xor te2[(s2 ushr 8) and 0xFF] xor te3[s3 and 0xFF] xor k[kOff]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$te0[s1 ushr 24] xor te1[(s2 ushr 16) and 0xFF] xor te2[(s3 ushr 8) and 0xFF] xor te3[s0 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$te0[s1 ushr 24] xor te1[(s2 ushr 16) and 0xFF] xor te2[(s3 ushr 8) and 0xFF] xor te3[s0 and 0xFF] xor k[kOff + 1]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$te0[s2 ushr 24] xor te1[(s3 ushr 16) and 0xFF] xor te2[(s0 ushr 8) and 0xFF] xor te3[s1 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$te0[s2 ushr 24] xor te1[(s3 ushr 16) and 0xFF] xor te2[(s0 ushr 8) and 0xFF] xor te3[s1 and 0xFF] xor k[kOff + 2]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$te0[s3 ushr 24] xor te1[(s0 ushr 16) and 0xFF] xor te2[(s1 ushr 8) and 0xFF] xor te3[s2 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$te0[s3 ushr 24] xor te1[(s0 ushr 16) and 0xFF] xor te2[(s1 ushr 8) and 0xFF] xor te3[s2 and 0xFF] xor k[kOff + 3]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$x0 = ((sbox[s0 ushr 24] shl 24) or (sbox[(s1 ushr 16) and 0xFF] shl 16) or (sbox[(s2 ushr 8) and 0xFF] shl 8) or sbox[s3 and 0xFF]) xor k[40]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$x1 = ((sbox[s1 ushr 24] shl 24) or (sbox[(s2 ushr 16) and 0xFF] shl 16) or (sbox[(s3 ushr 8) and 0xFF] shl 8) or sbox[s0 and 0xFF]) xor k[41]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$x2 = ((sbox[s2 ushr 24] shl 24) or (sbox[(s3 ushr 16) and 0xFF] shl 16) or (sbox[(s0 ushr 8) and 0xFF] shl 8) or sbox[s1 and 0xFF]) xor k[42]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes$x3 = ((sbox[s3 ushr 24] shl 24) or (sbox[(s0 ushr 16) and 0xFF] shl 16) or (sbox[(s1 ushr 8) and 0xFF] shl 8) or sbox[s2 and 0xFF]) xor k[43]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$((sbox[s0 ushr 24] shl 24) or (sbox[(s1 ushr 16) and 0xFF] shl 16) or (sbox[(s2 ushr 8) and 0xFF] shl 8) or sbox[s3 and 0xFF]) xor k[40]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$((sbox[s1 ushr 24] shl 24) or (sbox[(s2 ushr 16) and 0xFF] shl 16) or (sbox[(s3 ushr 8) and 0xFF] shl 8) or sbox[s0 and 0xFF]) xor k[41]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$((sbox[s2 ushr 24] shl 24) or (sbox[(s3 ushr 16) and 0xFF] shl 16) or (sbox[(s0 ushr 8) and 0xFF] shl 8) or sbox[s1 and 0xFF]) xor k[42]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$((sbox[s3 ushr 24] shl 24) or (sbox[(s0 ushr 16) and 0xFF] shl 16) or (sbox[(s1 ushr 8) and 0xFF] shl 8) or sbox[s2 and 0xFF]) xor k[43]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$(sbox[s0 ushr 24] shl 24) or (sbox[(s1 ushr 16) and 0xFF] shl 16) or (sbox[(s2 ushr 8) and 0xFF] shl 8)</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$(sbox[s0 ushr 24] shl 24) or (sbox[(s1 ushr 16) and 0xFF] shl 16) or (sbox[(s2 ushr 8) and 0xFF] shl 8) or sbox[s3 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$(sbox[s1 ushr 24] shl 24) or (sbox[(s2 ushr 16) and 0xFF] shl 16) or (sbox[(s3 ushr 8) and 0xFF] shl 8)</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$(sbox[s1 ushr 24] shl 24) or (sbox[(s2 ushr 16) and 0xFF] shl 16) or (sbox[(s3 ushr 8) and 0xFF] shl 8) or sbox[s0 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$(sbox[s2 ushr 24] shl 24) or (sbox[(s3 ushr 16) and 0xFF] shl 16) or (sbox[(s0 ushr 8) and 0xFF] shl 8)</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$(sbox[s2 ushr 24] shl 24) or (sbox[(s3 ushr 16) and 0xFF] shl 16) or (sbox[(s0 ushr 8) and 0xFF] shl 8) or sbox[s1 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$(sbox[s3 ushr 24] shl 24) or (sbox[(s0 ushr 16) and 0xFF] shl 16) or (sbox[(s1 ushr 8) and 0xFF] shl 8)</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$(sbox[s3 ushr 24] shl 24) or (sbox[(s0 ushr 16) and 0xFF] shl 16) or (sbox[(s1 ushr 8) and 0xFF] shl 8) or sbox[s2 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$kOff + 1</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$kOff + 2</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$kOff + 3</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$s0 and 0xFF</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$s1 and 0xFF</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$s2 and 0xFF</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$s3 and 0xFF</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$sbox[(s0 ushr 8) and 0xFF] shl 8</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$sbox[(s1 ushr 8) and 0xFF] shl 8</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$sbox[(s2 ushr 8) and 0xFF] shl 8</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$sbox[(s3 ushr 8) and 0xFF] shl 8</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$te0[s0 ushr 24] xor te1[(s1 ushr 16) and 0xFF] xor te2[(s2 ushr 8) and 0xFF] xor te3[s3 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$te0[s0 ushr 24] xor te1[(s1 ushr 16) and 0xFF] xor te2[(s2 ushr 8) and 0xFF] xor te3[s3 and 0xFF] xor k[kOff]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$te0[s1 ushr 24] xor te1[(s2 ushr 16) and 0xFF] xor te2[(s3 ushr 8) and 0xFF] xor te3[s0 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$te0[s1 ushr 24] xor te1[(s2 ushr 16) and 0xFF] xor te2[(s3 ushr 8) and 0xFF] xor te3[s0 and 0xFF] xor k[kOff + 1]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$te0[s2 ushr 24] xor te1[(s3 ushr 16) and 0xFF] xor te2[(s0 ushr 8) and 0xFF] xor te3[s1 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$te0[s2 ushr 24] xor te1[(s3 ushr 16) and 0xFF] xor te2[(s0 ushr 8) and 0xFF] xor te3[s1 and 0xFF] xor k[kOff + 2]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$te0[s3 ushr 24] xor te1[(s0 ushr 16) and 0xFF] xor te2[(s1 ushr 8) and 0xFF] xor te3[s2 and 0xFF]</ID>
+    <ID>BinaryExpressionWrapping:Aes.kt:Aes.Cipher$te0[s3 ushr 24] xor te1[(s0 ushr 16) and 0xFF] xor te2[(s1 ushr 8) and 0xFF] xor te3[s2 and 0xFF] xor k[kOff + 3]</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r1(b, c, d, a, x[11], 19)</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r1(b, c, d, a, x[15], 19)</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r1(b, c, d, a, x[3], 19)</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r1(b, c, d, a, x[7], 19)</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r2(b, c, d, a, x[12], 13)</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r2(b, c, d, a, x[13], 13)</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r2(b, c, d, a, x[14], 13)</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r2(b, c, d, a, x[15], 13)</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r3(b, c, d, a, x[12], 15)</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r3(b, c, d, a, x[13], 15)</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r3(b, c, d, a, x[14], 15)</ID>
+    <ID>BinaryExpressionWrapping:Md4.kt:Md4$b = r3(b, c, d, a, x[15], 15)</ID>
+    <ID>BinaryExpressionWrapping:SmbClient.kt:SmbClient$!setupResp2Header.isSigned || !SmbHeader.verifyPacketSignature(setupResp2Raw, negotiatedDialect, key)</ID>
+    <ID>BinaryExpressionWrapping:SmbClient.kt:SmbClient$!shouldEncrypt &amp;&amp; key != null &amp;&amp; !isGuestOrAnonymousSession</ID>
+    <ID>BinaryExpressionWrapping:SmbClient.kt:SmbClient$1 until creditWaiters.first().needed</ID>
+    <ID>BinaryExpressionWrapping:SmbClient.kt:SmbClient$availableCredits in 1 until creditWaiters.first().needed</ID>
+    <ID>BinaryExpressionWrapping:SmbClient.kt:SmbClient$closed || echoProbeRunning || pendingExchanges.isNotEmpty() || inFlightSenders &gt; 0 || creditWaiters.isEmpty()</ID>
+    <ID>BinaryExpressionWrapping:SmbClient.kt:SmbClient$closed || pendingExchanges.isNotEmpty() || inFlightSenders &gt; 0 || creditWaiters.isEmpty()</ID>
+    <ID>BinaryExpressionWrapping:SmbClient.kt:SmbClient$creditWaiters.isNotEmpty() &amp;&amp; availableCredits in 1 until creditWaiters.first().needed</ID>
+    <ID>BinaryExpressionWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$encryptShare &amp;&amp; dialect.isSmb3</ID>
+    <ID>BinaryExpressionWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$injectPendingAndNotifications &amp;&amp; reqParts.first().let { SmbHeader.decode(it).command } !in listOf(SmbCommand.NEGOTIATE, SmbCommand.SESSION_SETUP)</ID>
+    <ID>BinaryExpressionWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$reqParts.first().let { SmbHeader.decode(it).command } !in listOf(SmbCommand.NEGOTIATE, SmbCommand.SESSION_SETUP)</ID>
+    <ID>BinaryExpressionWrapping:SmbMessages.kt:SmbMessages.SessionSetupResponse$(sessionFlags.toInt() and (SMB2_SESSION_FLAG_IS_GUEST.toInt() or SMB2_SESSION_FLAG_IS_NULL.toInt())) != 0</ID>
+    <ID>BinaryExpressionWrapping:SmbModels.kt:SmbAccessMask$READ_DEFAULT or FILE_WRITE_DATA or FILE_APPEND_DATA or FILE_WRITE_ATTRIBUTES or FILE_WRITE_EA</ID>
+    <ID>BinaryExpressionWrapping:SmbShare.kt:SmbShare$SmbAccessMask.FILE_LIST_DIRECTORY or SmbAccessMask.FILE_READ_ATTRIBUTES or SmbAccessMask.SYNCHRONIZE</ID>
+    <ID>BlankLineBetweenWhenConditions:Md5.kt:Md5$when { i &lt; 16 -&gt; { f = (b and c) or (b.inv() and d) g = i } i &lt; 32 -&gt; { f = (d and b) or (d.inv() and c) g = (5 * i + 1) % 16 } i &lt; 48 -&gt; { f = b xor c xor d g = (3 * i + 5) % 16 } else -&gt; { f = c xor (b or d.inv()) g = (7 * i) % 16 } }</ID>
+    <ID>BlankLineBetweenWhenConditions:NtlmAuthenticator.kt:NtlmAuthenticator$when { length &lt; 0x80 -&gt; byteArrayOf(length.toByte()) length &lt;= 0xFF -&gt; byteArrayOf(0x81.toByte(), length.toByte()) length &lt;= 0xFFFF -&gt; byteArrayOf( 0x82.toByte(), ((length ushr 8) and 0xFF).toByte(), (length and 0xFF).toByte() ) else -&gt; byteArrayOf( 0x83.toByte(), ((length ushr 16) and 0xFF).toByte(), ((length ushr 8) and 0xFF).toByte(), (length and 0xFF).toByte() ) }</ID>
+    <ID>BlankLineBetweenWhenConditions:SmbClient.kt:SmbClient$when (config.encryptionPolicy) { SmbEncryptionPolicy.REQUIRED -&gt; { if (!cipherAvailable) { throw SmbException( NtStatus.STATUS_NOT_SUPPORTED, "SMB3 encryption is required by SmbConfig, but server ($negotiatedDialect) or credentials do not support encryption" ) } isSessionEncrypted = true } SmbEncryptionPolicy.NEGOTIATE -&gt; { isSessionEncrypted = cipherAvailable &amp;&amp; (setupResp2.encryptData || config.preferEncryption) } SmbEncryptionPolicy.DISABLED -&gt; { isSessionEncrypted = false } }</ID>
+    <ID>BlankLineBetweenWhenConditions:SmbClient.kt:SmbClient$when (header.command) { SmbCommand.CREATE -&gt; { closeOrphanedCreateHandleAsync(respPacket, requestTreeId, wasEncrypted) } SmbCommand.TREE_CONNECT -&gt; { val treeResp = runCatching { SmbMessages.parseTreeConnectResponse(respPacket) }.getOrNull() ?: return val forceEncrypt = wasEncrypted || (config.encryptionPolicy != SmbEncryptionPolicy.DISABLED &amp;&amp; treeResp.encryptData) val discReq = SmbMessages.buildTreeDisconnectRequest( sessionId = sessionId, treeId = treeResp.treeId, ) CoroutineScope(clientJob + readerDispatcher).launch { runCatching { executeCommand(discReq, forceEncrypt = forceEncrypt, cancellable = false) } } } else -&gt; Unit }</ID>
+    <ID>BlankLineBetweenWhenConditions:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$when (infoClass) { 13 -&gt; { // FileDispositionInformation (Delete) files.remove(path) directories.remove(path) } 10 -&gt; { // FileRenameInformation val newNameLen = plainReq.readUIntLE(bufOff + 16).toInt() val newPath = plainReq.decodeFromUtf16LE(bufOff + 20, newNameLen) if (directories.remove(path)) { directories.add(newPath) } else { val data = files.remove(path) ?: ByteArray(0) files[newPath] = data } openHandles[handleId] = newPath } 20 -&gt; { // FileEndOfFileInformation val newSize = plainReq.readULongLE(bufOff).toInt() val data = files[path] ?: ByteArray(0) files[path] = data.copyOf(newSize) } }</ID>
+    <ID>BlankLineBetweenWhenConditions:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$when (reqHeader.command) { SmbCommand.NEGOTIATE -&gt; { preauthHash = updateHash(preauthHash, plainReq) val resp = buildNegotiateResponse(reqHeader.messageId) resp.writeUShortLE(14, creditsGrantedPerResponse) preauthHash = updateHash(preauthHash, resp) resp } SmbCommand.SESSION_SETUP -&gt; { preauthHash = updateHash(preauthHash, plainReq) val secBufOffset = plainReq.readUShortLE(SmbHeader.SIZE + 12).toInt() val secBufLen = plainReq.readUShortLE(SmbHeader.SIZE + 14).toInt() val secBlob = plainReq.copyOfRange(secBufOffset, secBufOffset + secBufLen) if (reqHeader.sessionId == 0uL) { if (immediateAnonymousSuccess) { buildSessionSetupSuccess(reqHeader.messageId) } else { val resp = buildSessionSetupChallenge(reqHeader.messageId) resp.writeUShortLE(14, creditsGrantedPerResponse) preauthHash = updateHash(preauthHash, resp) resp } } else { if (!expectedCredentials.isAnonymous &amp;&amp; !returnGuestSessionFlag) { deriveSessionKeysFromType3(secBlob) } buildSessionSetupSuccess(reqHeader.messageId) } } SmbCommand.TREE_CONNECT -&gt; buildTreeConnectResponse(reqHeader) SmbCommand.TREE_DISCONNECT, SmbCommand.LOGOFF, SmbCommand.ECHO -&gt; buildSimpleResponse(reqHeader, 4) SmbCommand.CREATE -&gt; { val resp = handleCreate(reqHeader, plainReq) val respHdr = SmbHeader.decode(resp) if (respHdr.status == NtStatus.STATUS_SUCCESS) { lastCompoundHandleId = resp.readULongLE(SmbHeader.SIZE + 72) } else { compoundFailedStatus = respHdr.status } resp } SmbCommand.CLOSE, SmbCommand.FLUSH -&gt; { val vId = plainReq.readULongLE(SmbHeader.SIZE + 16) if (reqHeader.command == SmbCommand.CLOSE) { openHandles.remove(vId) dirQueryCounts.remove(vId) } buildSimpleResponse(reqHeader, if (reqHeader.command == SmbCommand.CLOSE) 60 else 4) } SmbCommand.WRITE -&gt; handleWrite(reqHeader, plainReq) SmbCommand.READ -&gt; handleRead(reqHeader, plainReq) SmbCommand.QUERY_DIRECTORY -&gt; handleQueryDirectory(reqHeader, plainReq) SmbCommand.LOCK -&gt; buildSimpleResponse(reqHeader, 4) SmbCommand.SET_INFO -&gt; { val resp = handleSetInfo(reqHeader, plainReq) val respHdr = SmbHeader.decode(resp) if (failTrailingCloseOnSetInfoError &amp;&amp; respHdr.status != NtStatus.STATUS_SUCCESS) { compoundFailedStatus = respHdr.status } resp } SmbCommand.IOCTL -&gt; handleIoctl(reqHeader, plainReq) else -&gt; buildSimpleResponse(reqHeader, 4, NtStatus.STATUS_NOT_SUPPORTED) }</ID>
+    <ID>BlankLineBetweenWhenConditions:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$when { multiFragmentRpcResponse -&gt; { val splitAt = stubBytes.size / 2 val stub1 = stubBytes.copyOfRange(0, splitAt) val stub2 = stubBytes.copyOfRange(splitAt, stubBytes.size) val pdu1 = ByteArray(24 + stub1.size).apply { this[0] = 5 this[2] = 2 this[3] = 0x01 // PFC_FIRST_FRAG only writeUShortLE(8, this.size.toUShort()) stub1.copyInto(this, 24) } val pdu2 = ByteArray(24 + stub2.size).apply { this[0] = 5 this[2] = 2 this[3] = 0x02 // PFC_LAST_FRAG writeUShortLE(8, this.size.toUShort()) stub2.copyInto(this, 24) } pendingPipeReads[handleId] = pdu2 pdu1 to NtStatus.STATUS_SUCCESS } splitRpcTransceiveResponse -&gt; { val pdu = ByteArray(24 + stubBytes.size).apply { this[0] = 5 this[2] = 2 this[3] = 0x03 writeUShortLE(8, this.size.toUShort()) stubBytes.copyInto(this, 24) } pendingPipeReads[handleId] = pdu.copyOfRange(40, pdu.size) pdu.copyOfRange(0, 40) to NtStatus.STATUS_BUFFER_OVERFLOW } else -&gt; { val pdu = ByteArray(24 + stubBytes.size).apply { this[0] = 5 this[2] = 2 this[3] = 0x03 writeUShortLE(8, this.size.toUShort()) stubBytes.copyInto(this, 24) } pdu to NtStatus.STATUS_SUCCESS } }</ID>
+    <ID>BlankLineBetweenWhenConditions:SmbRandomAccessFile.kt:SmbRandomAccessMode.Companion$when (mode.trim().lowercase()) { "r" -&gt; READ_ONLY "rw" -&gt; READ_WRITE "rws" -&gt; READ_WRITE_SYNC "rwd" -&gt; READ_WRITE_DSYNC else -&gt; throw IllegalArgumentException( "Illegal mode \"$mode\" must be one of \"r\", \"rw\", \"rws\", or \"rwd\"", ) }</ID>
+    <ID>BlankLineBetweenWhenConditions:SmbTransformHeader.kt:SmbTransformHeader$when (cipherId) { SmbCipherId.AES_128_CCM -&gt; Aes.ccmDecrypt( key = decryptionKey, nonce = rawNonce, aad = aad, ciphertext = transformPacket, expectedTag = signature, ciphertextOffset = SIZE, ciphertextLength = originalSize, ) SmbCipherId.AES_128_GCM -&gt; Aes.gcmDecrypt( key = decryptionKey, iv = rawNonce, aad = aad, ciphertext = transformPacket, expectedTag = signature, ciphertextOffset = SIZE, ciphertextLength = originalSize, ) }</ID>
+    <ID>ClassSignature:SmbClient.kt:SmbClient$PendingExchange</ID>
+    <ID>ClassSignature:SmbClient.kt:SmbClient.PendingExchange$Single : PendingExchange</ID>
+    <ID>ClassSignature:SmbFile.kt:SmbFile : AutoCloseable</ID>
+    <ID>ClassSignature:SmbMessages.kt:SmbMessages$CreateResponse</ID>
+    <ID>ClassSignature:SmbModels.kt:SmbFileId</ID>
+    <ID>ClassSignature:SmbModels.kt:SmbShareInfo</ID>
+    <ID>ClassSignature:SmbPipe.kt:SmbNamedPipe : AutoCloseable</ID>
+    <ID>ClassSignature:SmbPipe.kt:SmbPipeShare : AutoCloseable</ID>
+    <ID>ClassSignature:SmbRandomAccessFile.kt:SmbEndOfFileException : Exception</ID>
+    <ID>ClassSignature:SmbRandomAccessFile.kt:SmbRandomAccessMode</ID>
+    <ID>ComplexCondition:SmbClient.kt:SmbClient$closed || echoProbeRunning || pendingExchanges.isNotEmpty() || inFlightSenders &gt; 0 || creditWaiters.isEmpty()</ID>
+    <ID>ComplexCondition:SmbClient.kt:SmbClient$closed || pendingExchanges.isNotEmpty() || inFlightSenders &gt; 0 || creditWaiters.isEmpty()</ID>
+    <ID>ComplexCondition:SmbClient.kt:SmbClient$partIndex == parts.lastIndex &amp;&amp; isNtError &amp;&amp; header.messageId == exchange.expectedMessageIds.first() &amp;&amp; exchange.collected.size &lt; exchange.expectedMessageIds.size</ID>
+    <ID>ComplexCondition:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$disposition == 0u || disposition == 4u || disposition == 5u || !isKnownFile</ID>
+    <ID>ComplexCondition:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$disposition == 1u &amp;&amp; path.isNotEmpty() &amp;&amp; !isPipe &amp;&amp; !isKnownDir &amp;&amp; !isKnownFile</ID>
+    <ID>ComplexCondition:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$disposition == 2u &amp;&amp; path.isNotEmpty() &amp;&amp; (isKnownDir || isKnownFile)</ID>
+    <ID>ComplexCondition:SmbRandomAccessFile.kt:SmbRandomAccessFile$bufStart &gt;= 0L &amp;&amp; rel &gt;= 0L &amp;&amp; rel &lt; bufLen &amp;&amp; rel &lt; buf.size</ID>
+    <ID>CyclomaticComplexMethod:NtStatus.kt:NtStatus$fun nameOf: String</ID>
+    <ID>CyclomaticComplexMethod:SmbClient.kt:SmbClient$internal suspend fun initializeSession</ID>
+    <ID>CyclomaticComplexMethod:SmbClient.kt:SmbClient$private suspend fun dispatchIncomingPacket</ID>
+    <ID>CyclomaticComplexMethod:SmbClient.kt:SmbClient$private suspend fun executeCompoundCommandsInternal: List&lt;ByteArray&gt;</ID>
+    <ID>CyclomaticComplexMethod:SmbClient.kt:SmbClient$private suspend fun runEchoCreditProbeLoop</ID>
+    <ID>CyclomaticComplexMethod:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$override suspend fun sendPacket</ID>
+    <ID>CyclomaticComplexMethod:SmbMessages.kt:SmbMessages$fun parseNegotiateResponse: NegotiateResponse</ID>
+    <ID>EmptyFunctionBlock:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.&lt;no name provided&gt;${}</ID>
+    <ID>FunctionExpressionBody:Aes.kt:Aes${ return ((buf[offset].toInt() and 0xFF) shl 24) or ((buf[offset + 1].toInt() and 0xFF) shl 16) or ((buf[offset + 2].toInt() and 0xFF) shl 8) or (buf[offset + 3].toInt() and 0xFF) }</ID>
+    <ID>FunctionExpressionBody:NtlmAuthenticator.kt:NtlmAuthenticator${ return when { length &lt; 0x80 -&gt; byteArrayOf(length.toByte()) length &lt;= 0xFF -&gt; byteArrayOf(0x81.toByte(), length.toByte()) length &lt;= 0xFFFF -&gt; byteArrayOf( 0x82.toByte(), ((length ushr 8) and 0xFF).toByte(), (length and 0xFF).toByte() ) else -&gt; byteArrayOf( 0x83.toByte(), ((length ushr 16) and 0xFF).toByte(), ((length ushr 8) and 0xFF).toByte(), (length and 0xFF).toByte() ) } }</ID>
+    <ID>FunctionExpressionBody:SmbClient.kt:SmbClient${ return (isSessionEncrypted || forceEncrypt) &amp;&amp; negotiatedDialect.isSmb3 &amp;&amp; negotiatedCipher != null &amp;&amp; encryptionKey != null }</ID>
+    <ID>FunctionExpressionBody:SmbClient.kt:SmbClient${ return if (!supportsMultiCredit) { // MS-SMB2 3.2.4.1.5: CreditCharge MUST be 0 when SupportsMultiCredit is FALSE packet.writeUShortLE(6, 0u) 1u } else { val charge = packet.readUShortLE(6) if (charge == 0u.toUShort()) 1u else charge } }</ID>
+    <ID>FunctionExpressionBody:SmbClient.kt:SmbClient${ return if (shouldEncrypt) { SmbTransformHeader.encryptPacket( plainSmbPacket = plainRequest, sessionId = sessionId, cipherId = negotiatedCipher!!, encryptionKey = encryptionKey!!, ) } else { val key = signingKey val commandCode = plainRequest.readUShortLE(12) val mustSign = serverSigningRequired || config.alwaysSign || (negotiatedDialect.isSmb3 &amp;&amp; commandCode == SmbCommand.TREE_CONNECT.code) if (key != null &amp;&amp; !isGuestOrAnonymousSession &amp;&amp; mustSign) { SmbHeader.signPacket(plainRequest, negotiatedDialect, key) } plainRequest } }</ID>
+    <ID>FunctionExpressionBody:SmbFile.kt:SmbFile${ return SmbRandomAccessFile( file = this, path = path, mode = mode, bufferSize = bufferSize, ) }</ID>
+    <ID>FunctionExpressionBody:SmbModels.kt:SmbShareType.Companion${ return when (rawType and 0x000000FFu) { 0u -&gt; DISKTREE 1u -&gt; PRINTQ 2u -&gt; DEVICE 3u -&gt; IPC else -&gt; UNKNOWN } }</ID>
+    <ID>FunctionExpressionBody:SmbRandomAccessFile.kt:SmbRandomAccessFile${ return bufferStartOffset in 0L..offset &amp;&amp; offset &lt; bufferStartOffset + bufferValidLength }</ID>
+    <ID>FunctionExpressionBody:SmbRandomAccessFile.kt:SmbRandomAccessFile.Companion${ return SmbRandomAccessFile( share = share, path = path, mode = SmbRandomAccessMode.fromModeString(mode), bufferSize = bufferSize, ).open() }</ID>
+    <ID>FunctionExpressionBody:SmbRandomAccessFile.kt:SmbRandomAccessFile.Companion${ return SmbRandomAccessFile( share = share, path = path, mode = mode, bufferSize = bufferSize, ).open() }</ID>
+    <ID>FunctionExpressionBody:SmbRandomAccessFile.kt:SmbRandomAccessMode.Companion${ return when (mode.trim().lowercase()) { "r" -&gt; READ_ONLY "rw" -&gt; READ_WRITE "rws" -&gt; READ_WRITE_SYNC "rwd" -&gt; READ_WRITE_DSYNC else -&gt; throw IllegalArgumentException( "Illegal mode \"$mode\" must be one of \"r\", \"rw\", \"rws\", or \"rwd\"", ) } }</ID>
+    <ID>FunctionExpressionBody:SmbShare.kt:SmbShare${ return SmbRandomAccessFile.open( share = this, path = path, mode = mode, bufferSize = bufferSize, ) }</ID>
+    <ID>FunctionExpressionBody:SmbShare.kt:SmbShare${ return try { stat(path) true } catch (e: SmbException) { if (e.ntStatus == NtStatus.STATUS_OBJECT_NAME_NOT_FOUND || e.ntStatus == NtStatus.STATUS_OBJECT_PATH_NOT_FOUND || e.ntStatus == NtStatus.STATUS_NO_SUCH_FILE ) { false } else { throw e } } }</ID>
+    <ID>FunctionLiteral:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$&lt;anonymous&gt;</ID>
+    <ID>FunctionLiteral:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$&lt;anonymous&gt;</ID>
+    <ID>FunctionLiteral:SmbFile.kt:SmbFile$&lt;anonymous&gt;</ID>
+    <ID>FunctionSignature:CryptoTest.kt:CryptoTest$private fun ByteArray.toHex: String</ID>
+    <ID>FunctionSignature:Md4.kt:Md4$private fun r1: UInt</ID>
+    <ID>FunctionSignature:Smb3Kdf.kt:Smb3Kdf$fun deriveKeys: DerivedKeys</ID>
+    <ID>FunctionSignature:SmbClient.kt:SmbClient$private fun closeOrphanedCreateHandleAsync</ID>
+    <ID>FunctionSignature:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$private fun buildIoctlResponsePacket: ByteArray</ID>
+    <ID>FunctionSignature:SmbFile.kt:SmbFile$fun asRawSink: RawSink</ID>
+    <ID>FunctionSignature:SmbFile.kt:SmbFile$fun asRawSource: RawSource</ID>
+    <ID>FunctionSignature:SmbFile.kt:SmbFile$fun asSink: Sink</ID>
+    <ID>FunctionSignature:SmbFile.kt:SmbFile$fun asSource: Source</ID>
+    <ID>FunctionSignature:SmbFile.kt:SmbFile$suspend fun write: Int</ID>
+    <ID>FunctionSignature:SmbMessages.kt:SmbMessages$fun buildCloseRequest: ByteArray</ID>
+    <ID>FunctionSignature:SmbMessages.kt:SmbMessages$fun buildCompoundRelatedPacket: ByteArray</ID>
+    <ID>FunctionSignature:SmbMessages.kt:SmbMessages$fun buildFileDispositionPayload: ByteArray</ID>
+    <ID>FunctionSignature:SmbMessages.kt:SmbMessages$fun buildFlushRequest: ByteArray</ID>
+    <ID>FunctionSignature:SmbMessages.kt:SmbMessages$fun buildTreeConnectRequest: ByteArray</ID>
+    <ID>FunctionSignature:SmbMessages.kt:SmbMessages$fun buildTreeDisconnectRequest: ByteArray</ID>
+    <ID>FunctionSignature:SmbMessages.kt:SmbMessages$fun parseQueryDirectoryResponse: List&lt;SmbDirectoryEntry&gt;?</ID>
+    <ID>FunctionSignature:SmbMessages.kt:SmbMessages$fun parseReadResponseInto: Int</ID>
+    <ID>FunctionSignature:SmbMessages.kt:SmbMessages$private fun requireBodySize</ID>
+    <ID>FunctionSignature:SmbShare.kt:SmbShare$suspend fun openSink: Sink</ID>
+    <ID>ImportOrdering:SmbClientEndToEndTest.kt:import com.sorrowblue.kmcifs.client.auth.NtlmAuthenticator import com.sorrowblue.kmcifs.client.auth.SmbCredentials import com.sorrowblue.kmcifs.client.crypto.Md4 import com.sorrowblue.kmcifs.client.crypto.Md5 import com.sorrowblue.kmcifs.client.crypto.Rc4 import com.sorrowblue.kmcifs.client.crypto.Sha512 import com.sorrowblue.kmcifs.client.crypto.Smb3Kdf import com.sorrowblue.kmcifs.client.protocol.ByteUtils.decodeFromUtf16LE import com.sorrowblue.kmcifs.client.protocol.ByteUtils.encodeToUtf16LE import com.sorrowblue.kmcifs.client.protocol.ByteUtils.epochMillisToFiletime import com.sorrowblue.kmcifs.client.protocol.ByteUtils.filetimeToEpochMillis import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readUIntLE import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readULongLE import com.sorrowblue.kmcifs.client.protocol.ByteUtils.readUShortLE import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUIntLE import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeULongLE import com.sorrowblue.kmcifs.client.protocol.ByteUtils.writeUShortLE import com.sorrowblue.kmcifs.client.protocol.DceRpcSrvSvc import com.sorrowblue.kmcifs.client.protocol.NtStatus import com.sorrowblue.kmcifs.client.protocol.SmbAccessMask import com.sorrowblue.kmcifs.client.protocol.SmbCipherId import com.sorrowblue.kmcifs.client.protocol.SmbCommand import com.sorrowblue.kmcifs.client.protocol.SmbCreateDisposition import com.sorrowblue.kmcifs.client.protocol.SmbCreateOptions import com.sorrowblue.kmcifs.client.protocol.SmbDialect import com.sorrowblue.kmcifs.client.protocol.SmbException import com.sorrowblue.kmcifs.client.protocol.SmbFileAttributes import com.sorrowblue.kmcifs.client.protocol.SmbHeader import com.sorrowblue.kmcifs.client.protocol.SmbMessages import com.sorrowblue.kmcifs.client.protocol.SmbPacketTransport import com.sorrowblue.kmcifs.client.protocol.SmbShareType import com.sorrowblue.kmcifs.client.protocol.SmbTransformHeader import io.ktor.network.selector.SelectorManager import io.ktor.network.sockets.InetSocketAddress import io.ktor.network.sockets.aSocket import io.ktor.network.sockets.openReadChannel import io.ktor.network.sockets.openWriteChannel import io.ktor.utils.io.readFully import io.ktor.utils.io.writeFully import kotlinx.coroutines.CancellationException import kotlinx.coroutines.CompletableDeferred import kotlinx.coroutines.Dispatchers import kotlinx.coroutines.ExperimentalCoroutinesApi import kotlinx.coroutines.IO import kotlinx.coroutines.Job import kotlinx.coroutines.async import kotlinx.coroutines.awaitAll import kotlinx.coroutines.cancelAndJoin import kotlinx.coroutines.channels.Channel import kotlinx.coroutines.launch import kotlinx.coroutines.sync.Mutex import kotlinx.coroutines.sync.withLock import kotlinx.coroutines.test.runTest import kotlinx.coroutines.withContext import kotlinx.io.readByteArray import kotlinx.io.readString import kotlinx.io.writeString import kotlin.test.Test import kotlin.time.Duration.Companion.milliseconds import kotlin.time.Duration.Companion.seconds import kotlin.test.assertContentEquals import kotlin.test.assertEquals import kotlin.test.assertFailsWith import kotlin.test.assertFalse import kotlin.test.assertTrue</ID>
+    <ID>Indentation:SmbRandomAccessFile.kt:SmbRandomAccessFile$ </ID>
+    <ID>LargeClass:SmbClient.kt:SmbClient : AutoCloseable</ID>
+    <ID>LargeClass:SmbClientEndToEndTest.kt:SmbClientEndToEndTest</ID>
+    <ID>LongMethod:SmbClient.kt:SmbClient$internal suspend fun initializeSession</ID>
+    <ID>LongMethod:SmbClient.kt:SmbClient$private suspend fun dispatchIncomingPacket</ID>
+    <ID>LongMethod:SmbClient.kt:SmbClient$private suspend fun executeCompoundCommandsInternal: List&lt;ByteArray&gt;</ID>
+    <ID>LongMethod:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$@Test fun testAsyncPipeliningOutOfOrderResponsesAndCreditFlowControl</ID>
+    <ID>LongMethod:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$@Test fun testCoroutineCancellationAndRandomAccessCallerJobAbort</ID>
+    <ID>LongMethod:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$@Test fun testLoopbackTcpTransportAndSmbClientConnect</ID>
+    <ID>LongMethod:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$@Test fun testSmb202AndSmb302DialectsCcmAndAnonymousGuestSessions</ID>
+    <ID>LongMethod:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$override suspend fun sendPacket</ID>
+    <ID>MaximumLineLength:Aes.kt:Aes$)</ID>
+    <ID>MaximumLineLength:Aes.kt:Aes$]</ID>
+    <ID>MaximumLineLength:Aes.kt:Aes${</ID>
+    <ID>MaximumLineLength:Aes.kt:Aes.Cipher$]</ID>
+    <ID>MaximumLineLength:Md4.kt:Md4$)</ID>
+    <ID>MaximumLineLength:NtStatus.kt:SmbException$,</ID>
+    <ID>MaximumLineLength:NtlmAuthenticator.kt:NtlmAuthenticator$)</ID>
+    <ID>MaximumLineLength:SmbClient.kt:SmbClient$)</ID>
+    <ID>MaximumLineLength:SmbClient.kt:SmbClient$needed</ID>
+    <ID>MaximumLineLength:SmbClient.kt:SmbClient${</ID>
+    <ID>MaximumLineLength:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$)</ID>
+    <ID>MaximumLineLength:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$-&gt;</ID>
+    <ID>MaximumLineLength:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$)</ID>
+    <ID>MaximumLineLength:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport${</ID>
+    <ID>MaximumLineLength:SmbFile.kt:SmbFile$}</ID>
+    <ID>MaximumLineLength:SmbMessages.kt:SmbMessages.SessionSetupResponse$0</ID>
+    <ID>MaximumLineLength:SmbModels.kt:SmbAccessMask$FILE_WRITE_EA</ID>
+    <ID>MaximumLineLength:SmbShare.kt:SmbShare$,</ID>
+    <ID>MaximumLineLength:SmbShare.kt:SmbShare$FILE_NON_DIRECTORY_FILE</ID>
+    <ID>NestedBlockDepth:SmbMessages.kt:SmbMessages$fun parseNegotiateResponse: NegotiateResponse</ID>
+    <ID>ParameterListWrapping:SmbClient.kt:SmbClient$(ByteArray)</ID>
+    <ID>PropertyWrapping:NtlmAuthenticator.kt:NtlmAuthenticator$private val NTLMSSP_OID = byteArrayOf(0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x82.toByte(), 0x37, 0x02, 0x02, 0x0a)</ID>
+    <ID>PropertyWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$val client = SmbClient("192.168.1.10", 445, SmbConfig(encryptionPolicy = SmbEncryptionPolicy.DISABLED), mockTransport)</ID>
+    <ID>PropertyWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$val encClient = SmbClient("127.0.0.1", 445, SmbConfig(encryptionPolicy = SmbEncryptionPolicy.REQUIRED), strippingTransport)</ID>
+    <ID>SpacingBetweenDeclarationsWithComments:SmbModels.kt:SmbCreateDisposition.FILE_CREATE$/** If the file already exists, fail the request; otherwise, create the file. */</ID>
+    <ID>SpacingBetweenDeclarationsWithComments:SmbModels.kt:SmbCreateDisposition.FILE_OPEN$/** If the file already exists, open it; otherwise, fail the request. */</ID>
+    <ID>SpacingBetweenDeclarationsWithComments:SmbModels.kt:SmbCreateDisposition.FILE_OPEN_IF$/** If the file already exists, open it; otherwise, create the file. */</ID>
+    <ID>SpacingBetweenDeclarationsWithComments:SmbModels.kt:SmbCreateDisposition.FILE_OVERWRITE$/** If the file already exists, open and overwrite (truncate) it; otherwise, fail the request. */</ID>
+    <ID>SpacingBetweenDeclarationsWithComments:SmbModels.kt:SmbCreateDisposition.FILE_OVERWRITE_IF$/** If the file already exists, open and overwrite (truncate) it; otherwise, create the file. */</ID>
+    <ID>StatementWrapping:DceRpcSrvSvc.kt:DceRpcSrvSvc$;</ID>
+    <ID>StatementWrapping:Md4.kt:Md4$;</ID>
+    <ID>StatementWrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$;</ID>
+    <ID>TooGenericExceptionCaught:SmbClient.kt:SmbClient$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:SmbClient.kt:SmbClient.Companion$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:SmbShare.kt:SmbShare$e: Throwable</ID>
+    <ID>TooGenericExceptionCaught:SmbTransport.kt:KtorTcpSmbTransport.Companion$e: Throwable</ID>
+    <ID>TrailingCommaOnCallSite:Aes.kt:Aes$( 0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76, 0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0, 0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15, 0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75, 0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84, 0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf, 0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8, 0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2, 0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73, 0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb, 0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79, 0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08, 0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a, 0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e, 0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf, 0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16 )</ID>
+    <ID>TrailingCommaOnCallSite:CryptoTest.kt:CryptoTest$( "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843", hmac.toHex() )</ID>
+    <ID>TrailingCommaOnCallSite:CryptoTest.kt:CryptoTest$( "900150983cd24fb0d6963f7d28e17f72", Md5.digest("abc".encodeToByteArray()).toHex() )</ID>
+    <ID>TrailingCommaOnCallSite:CryptoTest.kt:CryptoTest$( "a448017aaf21d8525fc10ae87aa6729d", Md4.digest("abc".encodeToByteArray()).toHex() )</ID>
+    <ID>TrailingCommaOnCallSite:CryptoTest.kt:CryptoTest$( "a4f49c406510bdcab6824ee7c30fd852", Md4.digest("Password".encodeToUtf16LE()).toHex() )</ID>
+    <ID>TrailingCommaOnCallSite:CryptoTest.kt:CryptoTest$( "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", Sha256.digest("abc".encodeToByteArray()).toHex() )</ID>
+    <ID>TrailingCommaOnCallSite:CryptoTest.kt:CryptoTest$( "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f", Sha512.digest("abc".encodeToByteArray()).toHex() )</ID>
+    <ID>TrailingCommaOnCallSite:DceRpcSrvSvc.kt:DceRpcSrvSvc$( 0x04, 0x5d, 0x88.toByte(), 0x8a.toByte(), 0xeb.toByte(), 0x1c, 0xc9.toByte(), 0x11, 0x9f.toByte(), 0xe8.toByte(), 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60 )</ID>
+    <ID>TrailingCommaOnCallSite:DceRpcSrvSvc.kt:DceRpcSrvSvc$( 0xc8.toByte(), 0x4f, 0x32, 0x4b, 0x70, 0x16, 0xd3.toByte(), 0x01, 0x12, 0x78, 0x5a, 0x47, 0xbf.toByte(), 0x6e, 0xe1.toByte(), 0x88.toByte() )</ID>
+    <ID>TrailingCommaOnCallSite:DceRpcSrvSvc.kt:DceRpcSrvSvc$( SmbShareInfo( name = name, rawType = type, comment = comment ) )</ID>
+    <ID>TrailingCommaOnCallSite:DceRpcSrvSvc.kt:DceRpcSrvSvc$( name = name, rawType = type, comment = comment )</ID>
+    <ID>TrailingCommaOnCallSite:Md5.kt:Md5$( 0xd76aa478u, 0xe8c7b756u, 0x242070dbu, 0xc1bdceeeu, 0xf57c0fafu, 0x4787c62au, 0xa8304613u, 0xfd469501u, 0x698098d8u, 0x8b44f7afu, 0xffff5bb1u, 0x895cd7beu, 0x6b901122u, 0xfd987193u, 0xa679438eu, 0x49b40821u, 0xf61e2562u, 0xc040b340u, 0x265e5a51u, 0xe9b6c7aau, 0xd62f105du, 0x02441453u, 0xd8a1e681u, 0xe7d3fbc8u, 0x21e1cde6u, 0xc33707d6u, 0xf4d50d87u, 0x455a14edu, 0xa9e3e905u, 0xfcefa3f8u, 0x676f02d9u, 0x8d2a4c8au, 0xfffa3942u, 0x8771f681u, 0x6d9d6122u, 0xfde5380cu, 0xa4beea44u, 0x4bdecfa9u, 0xf6bb4b60u, 0xbebfbc70u, 0x289b7ec6u, 0xeaa127fau, 0xd4ef3085u, 0x04881d05u, 0xd9d4d039u, 0xe6db99e5u, 0x1fa27cf8u, 0xc4ac5665u, 0xf4292244u, 0x432aff97u, 0xab9423a7u, 0xfc93a039u, 0x655b59c3u, 0x8f0ccc92u, 0xffeff47du, 0x85845dd1u, 0x6fa87e4fu, 0xfe2ce6e0u, 0xa3014314u, 0x4e0811a1u, 0xf7537e82u, 0xbd3af235u, 0x2ad7d2bbu, 0xeb86d391u )</ID>
+    <ID>TrailingCommaOnCallSite:Md5.kt:Md5$( 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21 )</ID>
+    <ID>TrailingCommaOnCallSite:NtlmAuthenticator.kt:NtlmAuthenticator$( 'N'.code.toByte(), 'T'.code.toByte(), 'L'.code.toByte(), 'M'.code.toByte(), 'S'.code.toByte(), 'S'.code.toByte(), 'P'.code.toByte(), 0x00 )</ID>
+    <ID>TrailingCommaOnCallSite:NtlmAuthenticator.kt:NtlmAuthenticator$( 0x82.toByte(), ((length ushr 8) and 0xFF).toByte(), (length and 0xFF).toByte() )</ID>
+    <ID>TrailingCommaOnCallSite:NtlmAuthenticator.kt:NtlmAuthenticator$( 0x83.toByte(), ((length ushr 16) and 0xFF).toByte(), ((length ushr 8) and 0xFF).toByte(), (length and 0xFF).toByte() )</ID>
+    <ID>TrailingCommaOnCallSite:NtlmAuthenticator.kt:NtlmAuthenticator$( lmResponse = ByteArray(0), ntlmResponse = ByteArray(0), domainBytes = ByteArray(0), userBytes = ByteArray(0), workstationBytes = workstationBytes, encryptedRandomSessionKey = ByteArray(0), flags = flags, includeMic = false )</ID>
+    <ID>TrailingCommaOnCallSite:NtlmAuthenticator.kt:NtlmAuthenticator$( lmResponse = lmChallengeResponse, ntlmResponse = ntChallengeResponse, domainBytes = domainBytes, userBytes = userBytes, workstationBytes = workstationBytes, encryptedRandomSessionKey = encryptedRandomSessionKey, flags = flags, includeMic = includeMic )</ID>
+    <ID>TrailingCommaOnCallSite:NtlmAuthenticator.kt:NtlmAuthenticator$( rawType2Message = type2, negotiateFlags = flags, serverChallenge = serverChallenge, targetInfo = targetInfo, serverTimestamp = serverTimestamp )</ID>
+    <ID>TrailingCommaOnCallSite:NtlmAuthenticator.kt:NtlmAuthenticator$( rawType3Message = rawType3, spnegoTokenResp = wrapType3InSpnego(rawType3), exportedSessionKey = emptyKey )</ID>
+    <ID>TrailingCommaOnCallSite:NtlmAuthenticator.kt:NtlmAuthenticator$( rawType3Message = rawType3, spnegoTokenResp = wrapType3InSpnego(rawType3, mechListMic), exportedSessionKey = exportedSessionKey )</ID>
+    <ID>TrailingCommaOnCallSite:Sha256.kt:Sha256$( 0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u, 0x3956c25bu, 0x59f111f1u, 0x923f82a4u, 0xab1c5ed5u, 0xd807aa98u, 0x12835b01u, 0x243185beu, 0x550c7dc3u, 0x72be5d74u, 0x80deb1feu, 0x9bdc06a7u, 0xc19bf174u, 0xe49b69c1u, 0xefbe4786u, 0x0fc19dc6u, 0x240ca1ccu, 0x2de92c6fu, 0x4a7484aau, 0x5cb0a9dcu, 0x76f988dau, 0x983e5152u, 0xa831c66du, 0xb00327c8u, 0xbf597fc7u, 0xc6e00bf3u, 0xd5a79147u, 0x06ca6351u, 0x14292967u, 0x27b70a85u, 0x2e1b2138u, 0x4d2c6dfcu, 0x53380d13u, 0x650a7354u, 0x766a0abbu, 0x81c2c92eu, 0x92722c85u, 0xa2bfe8a1u, 0xa81a664bu, 0xc24b8b70u, 0xc76c51a3u, 0xd192e819u, 0xd6990624u, 0xf40e3585u, 0x106aa070u, 0x19a4c116u, 0x1e376c08u, 0x2748774cu, 0x34b0bcb5u, 0x391c0cb3u, 0x4ed8aa4au, 0x5b9cca4fu, 0x682e6ff3u, 0x748f82eeu, 0x78a5636fu, 0x84c87814u, 0x8cc70208u, 0x90befffau, 0xa4506cebu, 0xbef9a3f7u, 0xc67178f2u )</ID>
+    <ID>TrailingCommaOnCallSite:Sha512.kt:Sha512$( 0x428a2f98d728ae22uL, 0x7137449123ef65cduL, 0xb5c0fbcfec4d3b2fuL, 0xe9b5dba58189dbbcUL, 0x3956c25bf348b538uL, 0x59f111f1b605d019uL, 0x923f82a4af194f9buL, 0xab1c5ed5da6d8118uL, 0xd807aa98a3030242uL, 0x12835b0145706fbeuL, 0x243185be4ee4b28cuL, 0x550c7dc3d5ffb4e2uL, 0x72be5d74f27b896fuL, 0x80deb1fe3b1696b1uL, 0x9bdc06a725c71235uL, 0xc19bf174cf692694uL, 0xe49b69c19ef14ad2uL, 0xefbe4786384f25e3uL, 0x0fc19dc68b8cd5b5uL, 0x240ca1cc77ac9c65uL, 0x2de92c6f592b0275uL, 0x4a7484aa6ea6e483uL, 0x5cb0a9dcbd41fbd4uL, 0x76f988da831153b5uL, 0x983e5152ee66dfabuL, 0xa831c66d2db43210uL, 0xb00327c898fb213fuL, 0xbf597fc7beef0ee4uL, 0xc6e00bf33da88fc2uL, 0xd5a79147930aa725uL, 0x06ca6351e003826fuL, 0x142929670a0e6e70uL, 0x27b70a8546d22ffcuL, 0x2e1b21385c26c926uL, 0x4d2c6dfc5ac42aeduL, 0x53380d139d95b3dfuL, 0x650a73548baf63deuL, 0x766a0abb3c77b2a8uL, 0x81c2c92e47edaee6uL, 0x92722c851482353buL, 0xa2bfe8a14cf10364uL, 0xa81a664bbc423001uL, 0xc24b8b70d0f89791uL, 0xc76c51a30654be30uL, 0xd192e819d6ef5218uL, 0xd69906245565a910uL, 0xf40e35855771202auL, 0x106aa07032bbd1b8uL, 0x19a4c116b8d2d0c8uL, 0x1e376c085141ab53uL, 0x2748774cdf8eeb99uL, 0x34b0bcb5e19b48a8uL, 0x391c0cb3c5c95a63uL, 0x4ed8aa4ae3418acbuL, 0x5b9cca4f7763e373uL, 0x682e6ff3d6b2b8a3uL, 0x748f82ee5defb2fcuL, 0x78a5636f43172f60uL, 0x84c87814a1f0ab72uL, 0x8cc702081a6439ecuL, 0x90befffa23631e28uL, 0xa4506cebde82bde9uL, 0xbef9a3f7b2c67915uL, 0xc67178f2e372532buL, 0xca273eceea26619cuL, 0xd186b8c721c0c207uL, 0xeada7dd6cde0eb1euL, 0xf57d4f7fee6ed178uL, 0x06f067aa72176fbauL, 0x0a637dc5a2c898a6uL, 0x113f9804bef90daeuL, 0x1b710b35131c471buL, 0x28db77f523047d84uL, 0x32caab7b40c72493uL, 0x3c9ebe0a15c9bebcuL, 0x431d67c49c100d4cuL, 0x4cc5d4becb3e42b6uL, 0x597f299cfc657e2auL, 0x5fcb6fab3ad6faecuL, 0x6c44198c4a475817uL )</ID>
+    <ID>TrailingCommaOnCallSite:Smb3Kdf.kt:Smb3Kdf$( ((bitLength ushr 24) and 0xFF).toByte(), ((bitLength ushr 16) and 0xFF).toByte(), ((bitLength ushr 8) and 0xFF).toByte(), (bitLength and 0xFF).toByte() )</ID>
+    <ID>TrailingCommaOnCallSite:Smb3Kdf.kt:Smb3Kdf$( key16, "SMB2AESCCM\u0000".encodeToByteArray(), "ServerIn \u0000".encodeToByteArray() )</ID>
+    <ID>TrailingCommaOnCallSite:Smb3Kdf.kt:Smb3Kdf$( key16, "SMB2AESCCM\u0000".encodeToByteArray(), "ServerOut\u0000".encodeToByteArray() )</ID>
+    <ID>TrailingCommaOnCallSite:Smb3Kdf.kt:Smb3Kdf$( key16, "SMB2AESCMAC\u0000".encodeToByteArray(), "SmbSign\u0000".encodeToByteArray() )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClient.kt:SmbClient$( NtStatus.STATUS_ACCESS_DENIED, "Server SMB packet signature missing for ${header.command}" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClient.kt:SmbClient$( NtStatus.STATUS_ACCESS_DENIED, "Server SMB packet signature missing or verification failed for SESSION_SETUP" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClient.kt:SmbClient$( NtStatus.STATUS_ACCESS_DENIED, "Server SMB packet signature verification failed for ${header.command}" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClient.kt:SmbClient$( NtStatus.STATUS_INVALID_NETWORK_RESPONSE, "Server selected cipher ${negResp.negotiatedCipher} which was not offered by client (${config.ciphers})" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClient.kt:SmbClient$( NtStatus.STATUS_INVALID_NETWORK_RESPONSE, "Server selected dialect ${negResp.dialect} which was not offered by client (${config.dialects})" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClient.kt:SmbClient$( NtStatus.STATUS_INVALID_NETWORK_RESPONSE, "Unexpected SMB2 response MessageId: expected $expectedMessageId, got ${header.messageId}" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClient.kt:SmbClient$( NtStatus.STATUS_NOT_SUPPORTED, "SMB3 encryption is required by SmbConfig, but anonymous/guest session does not support encryption" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClient.kt:SmbClient$( NtStatus.STATUS_NOT_SUPPORTED, "SMB3 encryption is required by SmbConfig, but server ($negotiatedDialect) or credentials do not support encryption" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClient.kt:SmbClient$( setupResp2.status, "Authentication did not complete with STATUS_SUCCESS (${NtStatus.nameOf(setupResp2.status)})" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$( encryptionPolicy = SmbEncryptionPolicy.REQUIRED, preferEncryption = true )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClientEndToEndTest.kt:SmbClientEndToEndTest$( username = "alice", password = "SecretPassword123!", domain = "WORKGROUP" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$( b + 56, if (isDirectory) SmbFileAttributes.DIRECTORY else SmbFileAttributes.NORMAL )</ID>
+    <ID>TrailingCommaOnCallSite:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$( plainSmbPacket = plainResp, sessionId = sessionId, cipherId = cipherId, encryptionKey = serverEncryptionKey!! )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( 16 )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( 36, 0xFFFFFFFFu )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( 40, 0xFFFFFFFFFFFFFFFFuL )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( NtStatus.STATUS_INVALID_NETWORK_RESPONSE, "SMB 3.1.1 server did not negotiate SHA-512 preauth integrity capability" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( NtStatus.STATUS_NOT_SUPPORTED, "Server selected unsupported dialect: 0x${dialectCode.toString(16)}" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( SmbDirectoryEntry( name = name, size = endOfFile, allocationSize = allocationSize, fileAttributes = fileAttributes, creationTimeMillis = creationTime, lastAccessTimeMillis = lastAccessTime, lastWriteTimeMillis = lastWriteTime, changeTimeMillis = changeTime, fileId = fileId, ) )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( bodyOffset + 12, (SmbHeader.SIZE + bodyFixedSize).toUShort() )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( bodyOffset + 2, (SmbHeader.SIZE + bodyFixedSize).toUShort() )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( bodyOffset + 24, (SmbHeader.SIZE + bodyFixedSize).toUInt() )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( bodyOffset + 24, (SmbHeader.SIZE + bodyFixedSize).toUShort() )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( bodyOffset + 4, (SmbHeader.SIZE + bodyFixedSize).toUShort() )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( bodyOffset + 44, (SmbHeader.SIZE + bodyFixedSize).toUShort() )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( bodyOffset + 8, (SmbHeader.SIZE + bodyFixedSize).toUShort() )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( fileId = SmbFileId(persistentId, volatileId), metadata = SmbFileMetadata( size = endOfFile, allocationSize = allocationSize, fileAttributes = fileAttributes, creationTimeMillis = creationTime, lastAccessTimeMillis = lastAccessTime, lastWriteTimeMillis = lastWriteTime, changeTimeMillis = changeTime, ) )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( header.status, "$commandName failed with ${NtStatus.nameOf(header.status)}" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( header.status, "CREATE failed with ${NtStatus.nameOf(header.status)}" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( header.status, "Malformed $expectedCommand response: packet size (${packet.size}) &lt; required ($minPacketSize)" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( header.status, "NEGOTIATE failed with ${NtStatus.nameOf(header.status)}" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( header.status, "QUERY_DIRECTORY failed with ${NtStatus.nameOf(header.status)}" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( header.status, "SESSION_SETUP failed with ${NtStatus.nameOf(header.status)}" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( header.status, "TREE_CONNECT failed with ${NtStatus.nameOf(header.status)}" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbMessages.kt:SmbMessages$( header.status, "Unexpected SMB command in response: expected $expectedCommand, got ${header.command}" )</ID>
+    <ID>TrailingCommaOnCallSite:SmbRandomAccessFile.kt:SmbRandomAccessFile$( "SMB random-access operation cancelled", cause )</ID>
+    <ID>TrailingCommaOnDeclarationSite:SmbDialect.kt:SmbCipherId</ID>
+    <ID>TrailingCommaOnDeclarationSite:SmbDialect.kt:SmbDialect</ID>
+    <ID>TrailingCommaOnDeclarationSite:SmbHeader.kt:SmbCommand</ID>
+    <ID>TrailingCommaOnDeclarationSite:SmbMessages.kt:SmbMessages$( messageId: ULong = 0uL, sessionId: ULong, treeId: UInt )</ID>
+    <ID>TrailingCommaOnDeclarationSite:SmbMessages.kt:SmbMessages$( packet: ByteArray, excludeDotEntries: Boolean = true )</ID>
+    <ID>TrailingCommaOnDeclarationSite:SmbMessages.kt:SmbMessages$( packet: ByteArray, header: SmbHeader, expectedCommand: SmbCommand, minBodyBytes: Int )</ID>
+    <ID>TrailingCommaOnDeclarationSite:SmbModels.kt:SmbShareType</ID>
+    <ID>TrailingCommaOnDeclarationSite:SmbRandomAccessFile.kt:SmbRandomAccessMode</ID>
+    <ID>Wrapping:SmbClient.kt:SmbClient$(</ID>
+    <ID>Wrapping:SmbClientEndToEndTest.kt:SmbClientEndToEndTest.MockSmb3ServerTransport$SmbHeader.decode(it).command</ID>
+    <ID>Wrapping:SmbFile.kt:SmbFile$"File size ($size bytes) exceeds ByteArray capacity; use chunked read(offset, length)"</ID>
+  </CurrentIssues>
+</SmellBaseline>

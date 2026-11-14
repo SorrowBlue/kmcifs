@@ -1,0 +1,26 @@
+tasks:
+  checkDetekt:
+    action: !com.sorrowblue.kmcifs.detekt.checkDetekt
+      moduleName: ${module.name}
+      sources: ${module.kotlinJavaSources}
+      srcDir: ${module.rootDir}/src
+      testDir: ${module.rootDir}/test
+      configFile: ${project.rootDir}/config/detekt/detekt.yml
+      baselineFile: ${project.rootDir}/config/detekt/baselines/${module.name}.xml
+      outputDir: ${taskOutputDir}
+  generateBaseline:
+    action: !com.sorrowblue.kmcifs.detekt.generateDetektBaseline
+      moduleName: ${module.name}
+      sources: ${module.kotlinJavaSources}
+      srcDir: ${module.rootDir}/src
+      testDir: ${module.rootDir}/test
+      configFile: ${project.rootDir}/config/detekt/detekt.yml
+      baselineFile: ${project.rootDir}/config/detekt/baselines/${module.name}.xml
+
+checks:
+  - name: detekt
+    performedBy: checkDetekt
+
+commands:
+  - name: detektBaseline
+    performedBy: generateBaseline

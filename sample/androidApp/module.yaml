@@ -17,3 +17,6 @@ settings:
     namespace: com.sorrowblue.kmcifs.sample.android
     applicationId: com.sorrowblue.kmcifs.sample.android
     minSdk: 26
+
+plugins:
+  detekt: enabled

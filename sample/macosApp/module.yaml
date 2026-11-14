@@ -2,3 +2,6 @@ product: macos/app
 
 dependencies:
   - //sample
+
+plugins:
+  detekt: enabled

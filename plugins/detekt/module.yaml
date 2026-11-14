@@ -1,0 +1,16 @@
+product: jvm/amper-plugin
+
+description: Runs Detekt static code analysis
+
+dependencies:
+  - $libs.compose.rules.detekt
+  - $libs.detekt.core
+  - $libs.detekt.report.checkstyle
+  - $libs.detekt.report.html
+  - $libs.detekt.report.sarif
+  - $libs.detekt.rules
+  - $libs.detekt.rules.ktlint.wrapper
+  - $libs.detekt.tooling
+
+plugins:
+  detekt: enabled
