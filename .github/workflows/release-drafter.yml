@@ -43,7 +43,7 @@ jobs:
           fi
 
       - name: Draft release notes
-        uses: release-drafter/release-drafter@v7.10.0
+        uses: release-drafter/release-drafter@v7.11.0
         with:
           config-name: release-drafter.yml
           from: ${{ steps.baseline.outputs.from }}
@@ -57,6 +57,6 @@ jobs:
       pull-requests: write
     steps:
       - name: Run Autolabeler
-        uses: release-drafter/release-drafter/autolabeler@v7.10.0
+        uses: release-drafter/release-drafter/autolabeler@v7.11.0
         with:
           config-name: release-drafter.yml

@@ -187,7 +187,7 @@ jobs:
           fi
 
       - name: Update draft release with Release Drafter
-        uses: release-drafter/release-drafter@v7.10.0
+        uses: release-drafter/release-drafter@v7.11.0
         with:
           config-name: release-drafter.yml
           version: ${{ needs.prepare.outputs.version }}
